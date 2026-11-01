@@ -248,6 +248,21 @@
   min-height: 842px;
 }
 
+.page-sheet.landscape {
+  width: 842px;
+  min-height: 595px;
+}
+
+.page-sheet.columns-2 .preview-page-content {
+  column-count: 2;
+  column-gap: 24px;
+}
+
+.page-sheet.columns-3 .preview-page-content {
+  column-count: 3;
+  column-gap: 20px;
+}
+
 .preview-page-header {
   font-size: 9px;
   color: #777;

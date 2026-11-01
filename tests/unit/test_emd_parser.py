@@ -70,8 +70,8 @@ def test_preprocess_for_pandoc():
     # Check @pagebreak transformed to openxml
     assert "<w:br w:type=\"page\"/>" in pandoc_md
 
-    # Check @layout landscape transformed to Div
-    assert '::: {.section orientation="landscape"}' in pandoc_md
+    # Check @layout landscape transformed to section marker
+    assert 'ENGDOC_SECTION_MARKER:{"orientation": "landscape"}' in pandoc_md
 
     # Check @figure transformed to Div
     assert '::: {.figure id="FIG-001" width="20cm"}' in pandoc_md

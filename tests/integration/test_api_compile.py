@@ -75,6 +75,7 @@ async def test_compile_docx_api_endpoint(async_client: AsyncClient, tmp_path: Pa
     assert comp_data["stats"]["headings"] >= 2
     assert comp_data["stats"]["tables"] >= 1
     assert comp_data["stats"]["equations"] >= 1
+    assert comp_data["stats"]["sections"] >= 1
     assert comp_data["duration_seconds"] > 0
 
     # 4. Download compiled document

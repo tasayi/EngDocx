@@ -4,6 +4,8 @@ from pathlib import Path
 
 import docx
 
+from engdoc.compiler.layout import SectionLayout
+from engdoc.compiler.postprocess import DocxPostprocessor
 from engdoc.compiler.runner import CompilationResult, PandocRunner
 from engdoc.core.exceptions import ProjectArchiveError
 from engdoc.markup.parser import EMDParser
@@ -12,7 +14,7 @@ from engdoc.templates.manager import TemplateManager
 
 
 class PublishingService:
-    """Coordinates document parsing, asset resolution, and Pandoc compilation."""
+    """Coordinates document parsing, asset resolution, Pandoc compilation, and layout post-processing."""
 
     @classmethod
     async def compile_session_docx(
@@ -21,7 +23,7 @@ class PublishingService:
         template_name: str | None = None,
         output_filename: str | None = None,
     ) -> CompilationResult:
-        """Compiles the active project session into an editable Word .docx document."""
+        """Compiles the active project session into an editable Word .docx document with multi-section layout."""
         entry_rel = session.manifest.entry_point
         entry_file = session.workspace_dir / entry_rel
         if not entry_file.is_file():
@@ -37,7 +39,7 @@ class PublishingService:
             active_tpl_name, session_workspace=session.workspace_dir
         )
 
-        # 3. Preprocess EMD to Pandoc-compatible markdown
+        # 3. Preprocess EMD to Pandoc-compatible markdown with layout markers
         preprocessed_md = EMDParser.preprocess_for_pandoc(emd_doc)
 
         # 4. Determine output path
@@ -56,21 +58,27 @@ class PublishingService:
             reference_docx=resolved_tpl,
         )
 
-        # 6. Validate output DOCX integrity
+        # 6. Post-process OpenXML DOM to inject multi-section layouts
         if res.success and target_docx.is_file():
+            initial_params = dict(emd_doc.frontmatter.extra)
+            initial_layout = SectionLayout.from_params(initial_params)
+            DocxPostprocessor.process(target_docx, initial_layout=initial_layout)
+
+            # Validate output DOCX integrity
             cls.validate_generated_docx(target_docx)
 
         return res
 
     @staticmethod
     def validate_generated_docx(docx_path: Path) -> dict[str, int]:
-        """Inspects the generated DOCX file and counts headings, paragraphs, tables, and equations."""
+        """Inspects the generated DOCX file and counts headings, paragraphs, tables, equations, and sections."""
         doc = docx.Document(docx_path)
         stats = {
             "paragraphs": len(doc.paragraphs),
             "tables": len(doc.tables),
             "headings": 0,
             "equations": 0,
+            "sections": len(doc.sections),
         }
 
         for p in doc.paragraphs:

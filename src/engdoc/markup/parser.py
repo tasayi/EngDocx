@@ -1,5 +1,6 @@
 """EMD (Engineering Markdown) Parser and Preprocessor."""
 
+import json
 import re
 from typing import Any
 
@@ -135,46 +136,45 @@ class EMDParser:
         """Pre-processes EMD body text into standard Pandoc-compatible markdown with directives."""
         content = emd_doc.body_markdown
 
+        # Helper for OpenXML section marker
+        def make_section_marker(params: dict[str, Any]) -> str:
+            payload = json.dumps(params)
+            return f'\n```{{=openxml}}\n<w:p><w:r><w:t>ENGDOC_SECTION_MARKER:{payload}</w:t></w:r></w:p>\n```\n'
+
         # 1. Transform @pagebreak to native Word OpenXML page break
         openxml_pagebreak = (
             '\n```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```\n'
         )
         content = PAGEBREAK_REGEX.sub(openxml_pagebreak, content)
 
-        # 2. Transform @sectionbreak to native Word section break placeholder
-        openxml_sectbreak = (
-            '\n```{=openxml}\n<w:p><w:pPr><w:sectPr><w:type w:val="nextPage"/></w:sectPr></w:pPr></w:p>\n```\n'
-        )
-        content = SECTIONBREAK_REGEX.sub(openxml_sectbreak, content)
+        # 2. Transform @sectionbreak to an empty section marker
+        content = SECTIONBREAK_REGEX.sub(make_section_marker({}), content)
 
-        # 3. Transform @layout shorthands into Pandoc Divs
+        # 3. Transform @layout shorthands into section markers
         def layout_repl(m: re.Match) -> str:
             val = m.group("val").lower()
             if val == "landscape":
-                return '\n::: {.section orientation="landscape"}\n:::\n'
+                return make_section_marker({"orientation": "landscape"})
             elif val == "portrait":
-                return '\n::: {.section orientation="portrait"}\n:::\n'
+                return make_section_marker({"orientation": "portrait"})
             elif val == "two-column":
-                return '\n::: {.section columns="2"}\n:::\n'
+                return make_section_marker({"columns": 2})
             elif val == "single-column":
-                return '\n::: {.section columns="1"}\n:::\n'
+                return make_section_marker({"columns": 1})
             return ""
 
         content = LAYOUT_SHORTHAND_REGEX.sub(layout_repl, content)
 
-        # 4. Transform @section ... @end blocks into Pandoc Divs
+        # 4. Transform @section ... @end blocks into section markers
         def section_repl(m: re.Match) -> str:
             body_text = m.group("body")
-            attrs: list[str] = [".section"]
+            params: dict[str, Any] = {}
             for line in body_text.splitlines():
                 line = line.strip()
                 if ":" in line:
                     k, v = line.split(":", 1)
-                    k = k.strip()
-                    v = v.strip().strip("\"'")
-                    attrs.append(f'{k}="{v}"')
-            attr_str = " ".join(attrs)
-            return f"\n::: {{{attr_str}}}\n:::\n"
+                    params[k.strip().lower()] = v.strip().strip("\"'")
+            return make_section_marker(params)
 
         content = re.sub(
             r"^@section[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
