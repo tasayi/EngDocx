@@ -41,6 +41,15 @@ def _check_cli_version(command: list[str]) -> str | None:
 def check_pandoc() -> ToolStatus:
     path = shutil.which("pandoc")
     if not path:
+        try:
+            import pypandoc
+            pandoc_candidate = pypandoc.get_pandoc_path()
+            if pandoc_candidate and shutil.which(pandoc_candidate):
+                path = pandoc_candidate
+        except Exception:
+            pass
+
+    if not path:
         return ToolStatus(
             name="Pandoc",
             available=False,

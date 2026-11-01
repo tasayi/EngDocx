@@ -275,11 +275,57 @@ class ProjectState {
       this.renderTree();
     }
   }
+
+  async compileProjectDocx() {
+    if (!this.sessionId) {
+      alert('Please create or open a project before building.');
+      return;
+    }
+    await this.saveActiveFile();
+
+    const statusText = document.getElementById('status-text');
+    if (statusText) statusText.textContent = '⚙️ Compiling DOCX...';
+
+    try {
+      const res = await fetch('/api/compile/docx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: this.sessionId }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (statusText) {
+        statusText.textContent = `Built: ${data.filename} (${data.duration_seconds}s)`;
+      }
+
+      // Trigger download
+      const a = document.createElement('a');
+      a.href = data.download_url;
+      a.download = data.filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      console.log('DOCX Compilation Success:', data);
+    } catch (err) {
+      console.error('Compilation failed:', err);
+      alert(`Build failed: ${err.message}`);
+      if (statusText) statusText.textContent = 'Build Failed';
+    }
+  }
 }
 
 export const projectState = new ProjectState();
 
 export function initProjectNavigator() {
+  // Build Project Trigger
+  const btnBuild = document.getElementById('btn-build');
+  btnBuild?.addEventListener('click', () => {
+    projectState.compileProjectDocx();
+  });
   // New Project Modal triggers
   const btnNewProj = document.getElementById('btn-new-proj');
   const modalNewProj = document.getElementById('modal-new-project');

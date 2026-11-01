@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from engdoc.api.routes_compile import router as compile_router
 from engdoc.api.routes_projects import router as projects_router
 from engdoc.api.routes_system import router as system_router
 from engdoc.core.config import settings
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     # API Routers
     app.include_router(system_router, prefix=settings.API_PREFIX)
     app.include_router(projects_router, prefix=settings.API_PREFIX)
+    app.include_router(compile_router, prefix=settings.API_PREFIX)
 
     # Mount frontend static directory if present
     if settings.FRONTEND_DIR.is_dir():
