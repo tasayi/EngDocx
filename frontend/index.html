@@ -50,7 +50,11 @@
             </ul>
           </div>
           <div class="tree-group">
-            <div class="tree-title">📊 Figures</div>
+            <div class="tree-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span>📊 Figures</span>
+              <button class="icon-btn" id="btn-upload-figure" title="Upload Figure (SVG/PNG)">+</button>
+            </div>
+            <input type="file" id="input-upload-figure" accept=".svg,.png,.jpg,.jpeg" style="display: none;">
             <ul id="tree-figures" class="tree-list">
               <li class="empty-hint">No figures registered.</li>
             </ul>

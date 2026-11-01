@@ -8,6 +8,7 @@ from engdoc.compiler.layout import SectionLayout
 from engdoc.compiler.postprocess import DocxPostprocessor
 from engdoc.compiler.runner import CompilationResult, PandocRunner
 from engdoc.core.exceptions import ProjectArchiveError
+from engdoc.figures.service import FigureService
 from engdoc.markup.parser import EMDParser
 from engdoc.project.session import ProjectSession
 from engdoc.templates.manager import TemplateManager
@@ -33,16 +34,25 @@ class PublishingService:
         raw_text = entry_file.read_text(encoding="utf-8")
         emd_doc = EMDParser.parse(raw_text)
 
-        # 2. Determine template
+        # 2. Prepare all registered figures and ensure compiled assets in .cache/
+        FigureService.prepare_session_figures(session.workspace_dir)
+
+        # 3. Determine template
         active_tpl_name = template_name or emd_doc.frontmatter.template
         resolved_tpl = TemplateManager.resolve_template_path(
             active_tpl_name, session_workspace=session.workspace_dir
         )
 
-        # 3. Preprocess EMD to Pandoc-compatible markdown with layout markers
-        preprocessed_md = EMDParser.preprocess_for_pandoc(emd_doc)
+        # 4. Preprocess EMD to Pandoc-compatible markdown with layout markers & figure resolution
+        def figure_resolver(fid, params):
+            return FigureService.resolve_figure_directive(
+                    fid, params, session.workspace_dir
+                )
+        preprocessed_md = EMDParser.preprocess_for_pandoc(
+            emd_doc, figure_resolver=figure_resolver
+        )
 
-        # 4. Determine output path
+        # 5. Determine output path
         out_dir = session.workspace_dir / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
         default_name = f"{session.manifest.document_number}_Rev_{session.manifest.revision}.docx"
@@ -51,11 +61,12 @@ class PublishingService:
             out_name += ".docx"
         target_docx = out_dir / out_name
 
-        # 5. Compile via Pandoc
+        # 6. Compile via Pandoc with workspace resource resolution
         res = await PandocRunner.compile_to_docx(
             markdown_text=preprocessed_md,
             output_path=target_docx,
             reference_docx=resolved_tpl,
+            cwd=session.workspace_dir,
         )
 
         # 6. Post-process OpenXML DOM to inject multi-section layouts
@@ -79,6 +90,7 @@ class PublishingService:
             "headings": 0,
             "equations": 0,
             "sections": len(doc.sections),
+            "drawings": len(doc.element.xpath(".//w:drawing")),
         }
 
         for p in doc.paragraphs:

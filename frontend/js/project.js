@@ -2,7 +2,7 @@
  * EngDoc Project Navigator & State Management
  */
 
-import { loadContent, getContent, getActivePath } from './editor.js';
+import { loadContent, getContent, getActivePath, insertSnippet } from './editor.js';
 
 class ProjectState {
   constructor() {
@@ -83,6 +83,16 @@ class ProjectState {
         const li = document.createElement('li');
         li.dataset.path = fig.path;
         li.innerHTML = `<span class="tree-icon">🖼️</span> ${fig.name}`;
+        li.addEventListener('click', () => {
+          const desc = document.getElementById('prop-active-desc');
+          if (desc) {
+            const figStem = fig.name.replace(/\.[^/.]+$/, '');
+            desc.innerHTML = `<strong>Figure:</strong> ${fig.name}<br><strong>Path:</strong> ${fig.path}<br><button class="btn-sm" id="btn-insert-active-fig" style="margin-top:8px;">Insert @figure</button>`;
+            document.getElementById('btn-insert-active-fig')?.addEventListener('click', () => {
+              insertSnippet(`\n@figure ${figStem}\n  width: 16cm\n  alignment: center\n  caption: ${figStem}\n@end\n`);
+            });
+          }
+        });
         treeFigs.appendChild(li);
       });
     }
@@ -447,4 +457,43 @@ export function initProjectNavigator() {
       closeFileModal();
     });
   }
+
+  // Figure Upload
+  const btnUploadFig = document.getElementById('btn-upload-figure');
+  const inputUploadFig = document.getElementById('input-upload-figure');
+  btnUploadFig?.addEventListener('click', () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    inputUploadFig?.click();
+  });
+
+  inputUploadFig?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file || !projectState.sessionId) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('caption', file.name.replace(/\.[^/.]+$/, ''));
+
+    try {
+      const res = await fetch(`/api/figures/${projectState.sessionId}/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const fig = await res.json();
+      await projectState.refreshTree();
+      alert(`Figure ${fig.id} (${file.name}) uploaded and registered successfully.`);
+    } catch (err) {
+      console.error('Figure upload failed:', err);
+      alert(`Upload failed: ${err.message}`);
+    } finally {
+      inputUploadFig.value = '';
+    }
+  });
 }

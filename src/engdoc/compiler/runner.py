@@ -52,6 +52,7 @@ class PandocRunner:
         reference_docx: Path | None = None,
         lua_filters: list[Path] | None = None,
         extra_args: list[str] | None = None,
+        cwd: Path | None = None,
         timeout_seconds: float = 60.0,
     ) -> CompilationResult:
         """Compiles a markdown string directly into a Word .docx file."""
@@ -77,6 +78,9 @@ class PandocRunner:
             str(output_path),
         ]
 
+        if cwd and cwd.is_dir():
+            cmd.extend(["--resource-path", str(cwd.resolve())])
+
         if reference_docx and reference_docx.is_file():
             cmd.extend(["--reference-doc", str(reference_docx.resolve())])
 
@@ -99,6 +103,7 @@ class PandocRunner:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                cwd=str(cwd.resolve()) if cwd else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

@@ -132,7 +132,11 @@ class EMDParser:
         )
 
     @classmethod
-    def preprocess_for_pandoc(cls, emd_doc: EMDDocument) -> str:
+    def preprocess_for_pandoc(
+        cls,
+        emd_doc: EMDDocument,
+        figure_resolver: Any = None,
+    ) -> str:
         """Pre-processes EMD body text into standard Pandoc-compatible markdown with directives."""
         content = emd_doc.body_markdown
 
@@ -187,15 +191,18 @@ class EMDParser:
         def figure_repl(m: re.Match) -> str:
             fig_id = m.group("id") or "FIG"
             body_text = m.group("body")
-            caption = ""
-            width = "16cm"
+            params: dict[str, Any] = {}
             for line in body_text.splitlines():
                 line = line.strip()
-                if line.startswith("caption:"):
-                    caption = line.split(":", 1)[1].strip().strip("\"'")
-                elif line.startswith("width:"):
-                    width = line.split(":", 1)[1].strip().strip("\"'")
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    params[k.strip().lower()] = v.strip().strip("\"'")
 
+            if figure_resolver:
+                return figure_resolver(fig_id, params)
+
+            caption = params.get("caption", "")
+            width = params.get("width", "16cm")
             return (
                 f'\n::: {{.figure id="{fig_id}" width="{width}"}}\n'
                 f"**Figure {fig_id}**: {caption}\n"
