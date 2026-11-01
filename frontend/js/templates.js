@@ -11,3 +11,4 @@ export class TemplateManagerUI {
     this.activeTemplate = name;
   }
 }
+

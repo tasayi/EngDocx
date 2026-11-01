@@ -116,3 +116,4 @@ Cross-references use canonical prefixes and resolve automated numbering upon com
 - Equations: `@eq:snr`
 - Tables: `@tbl:link-budget`
 - Sections: `@sec:architecture`
+

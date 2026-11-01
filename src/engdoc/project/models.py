@@ -71,8 +71,60 @@ class CreateProjectRequest(BaseModel):
     revision: str = "A"
     output_path: str | None = None
 
+class OpenProjectRequest(BaseModel):
+    archive_path: str
+
 class ValidationResult(BaseModel):
     valid: bool
     manifest: ProjectManifest | None = None
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+class TreeItem(BaseModel):
+    name: str
+    path: str
+    item_type: Literal["file", "directory"]
+    category: Literal["document", "figure", "template", "metadata", "other"]
+    size_bytes: int = 0
+    children: list["TreeItem"] = Field(default_factory=list)
+
+class ResourceTreeResponse(BaseModel):
+    project_name: str
+    document_number: str
+    revision: str
+    entry_point: str
+    documents: list[TreeItem]
+    figures: list[TreeItem]
+    templates: list[TreeItem]
+    metadata: list[TreeItem]
+
+class FileContentResponse(BaseModel):
+    path: str
+    content: str
+    modified_at: str
+    is_readonly: bool = False
+
+class SaveFileRequest(BaseModel):
+    path: str
+    content: str
+
+class CreateFileRequest(BaseModel):
+    path: str
+    content: str = ""
+
+class UpdateManifestRequest(BaseModel):
+    project_name: str | None = None
+    document_number: str | None = None
+    revision: str | None = None
+    entry_point: str | None = None
+    default_template: str | None = None
+
+class SessionStatusResponse(BaseModel):
+    session_id: str
+    project_name: str
+    document_number: str
+    revision: str
+    archive_path: str
+    is_dirty: bool
+    dirty_files: list[str]
+    last_saved_at: str | None

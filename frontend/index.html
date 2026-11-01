@@ -19,12 +19,11 @@
         <span class="brand-version">v0.1.0</span>
       </div>
       <nav class="toolbar-menu">
-        <button class="menu-btn" data-action="file">File</button>
-        <button class="menu-btn" data-action="edit">Edit</button>
+        <button class="menu-btn" id="btn-new-proj" title="Create New Project">New</button>
+        <button class="menu-btn" id="btn-open-proj" title="Open .mdoc Project">Open</button>
         <button class="menu-btn" data-action="insert">Insert</button>
         <button class="menu-btn" data-action="layout">Layout</button>
         <button class="menu-btn" data-action="figures">Figures</button>
-        <button class="menu-btn" data-action="references">References</button>
         <button class="menu-btn" data-action="templates">Templates</button>
         <button class="menu-btn primary" data-action="publish">Publish</button>
       </nav>
@@ -41,28 +40,25 @@
       <aside id="panel-navigator" class="panel resizable-panel">
         <div class="panel-header">
           <span>Project Navigator</span>
-          <button class="icon-btn" id="btn-new-file" title="New Document">+</button>
+          <button class="icon-btn" id="btn-new-file" title="Create New Document in Project">+</button>
         </div>
         <div class="panel-content">
           <div class="tree-group">
             <div class="tree-title">📄 Documents</div>
             <ul id="tree-documents" class="tree-list">
-              <li class="active"><span class="tree-icon">📝</span> main.md</li>
-              <li><span class="tree-icon">📝</span> introduction.md</li>
-              <li><span class="tree-icon">📝</span> architecture.md</li>
+              <li class="empty-hint">No project loaded.</li>
             </ul>
           </div>
           <div class="tree-group">
             <div class="tree-title">📊 Figures</div>
             <ul id="tree-figures" class="tree-list">
-              <li><span class="tree-icon">🖼️</span> FIG-001 (receiver.svg)</li>
-              <li><span class="tree-icon">🖼️</span> FIG-002 (link_budget.svg)</li>
+              <li class="empty-hint">No figures registered.</li>
             </ul>
           </div>
           <div class="tree-group">
             <div class="tree-title">📑 Templates</div>
             <ul id="tree-templates" class="tree-list">
-              <li><span class="tree-icon">📘</span> technical_report.docx</li>
+              <li class="empty-hint">No templates loaded.</li>
             </ul>
           </div>
         </div>
@@ -71,11 +67,11 @@
       <!-- Panel Divider 1 -->
       <div class="resizer" id="resizer-nav"></div>
 
-      <!-- Area 3: Markup Editor -->
+      <!-- Area 3: Markup Editor (CodeMirror 6) -->
       <main id="panel-editor" class="panel">
         <div class="panel-header">
-          <div class="file-tabs">
-            <div class="tab active">main.md <span class="tab-close">×</span></div>
+          <div class="file-tabs" id="editor-tabs">
+            <!-- Dynamically populated document tabs -->
           </div>
           <div class="editor-tools">
             <button class="tool-btn" id="insert-section" title="Insert Section Directive">@section</button>
@@ -84,38 +80,7 @@
           </div>
         </div>
         <div class="panel-content editor-wrapper">
-          <textarea id="emd-editor" spellcheck="false">---
-title: RF Receiver Subsystem Design
-document_number: ENG-RX-001
-revision: A
-author: Radar Systems Engineering
-template: technical_report.docx
----
-
-# 1. System Overview
-
-The receiver architecture implements a dual-conversion heterodyne topology.
-
-@layout landscape
-
-# 2. Block Diagram & Layout
-
-@figure FIG-001
-  width: 22cm
-  alignment: center
-  caption: High-level dual-conversion RF receiver schematic.
-@end
-
-@layout portrait
-
-# 3. Link Budget Analysis
-
-Key sensitivity equations:
-
-$$
-P_{\text{sens}} = -174 \text{ dBm/Hz} + NF + 10\log_{10}(B) + SNR_{\text{min}}
-$$ {#eq:sensitivity}
-</textarea>
+          <div id="codemirror-root"></div>
         </div>
       </main>
 
@@ -131,7 +96,7 @@ $$ {#eq:sensitivity}
           <div class="prop-section">
             <div class="prop-title">Section Layout</div>
             <label>Orientation</label>
-            <div class="btn-group">
+            <div class="btn-group" id="group-orientation">
               <button class="group-btn active" data-val="portrait">Portrait</button>
               <button class="group-btn" data-val="landscape">Landscape</button>
             </div>
@@ -144,7 +109,7 @@ $$ {#eq:sensitivity}
             </select>
 
             <label>Columns</label>
-            <div class="btn-group">
+            <div class="btn-group" id="group-columns">
               <button class="group-btn active" data-val="1">1</button>
               <button class="group-btn" data-val="2">2</button>
               <button class="group-btn" data-val="3">3</button>
@@ -156,7 +121,7 @@ $$ {#eq:sensitivity}
 
           <div class="prop-section">
             <div class="prop-title">Active Element</div>
-            <div id="prop-active-desc" class="info-box">No element selected. Select a section or figure directive to edit parameters.</div>
+            <div id="prop-active-desc" class="info-box">Select an element in the editor to inspect properties.</div>
           </div>
         </div>
       </aside>
@@ -174,10 +139,10 @@ $$ {#eq:sensitivity}
       </div>
       <div class="preview-body" id="preview-frame-container">
         <div class="page-sheet portrait">
-          <div class="preview-page-header">ENG-RX-001 | Rev A</div>
-          <div class="preview-page-content">
-            <h1>1. System Overview</h1>
-            <p>The receiver architecture implements a dual-conversion heterodyne topology.</p>
+          <div class="preview-page-header" id="preview-doc-header">ENG-DOC | Rev A</div>
+          <div class="preview-page-content" id="preview-html-content">
+            <h1>Document Preview</h1>
+            <p>Live preview will reflect compiled section layouts and content.</p>
           </div>
           <div class="preview-page-footer">Page 1</div>
         </div>
@@ -186,11 +151,52 @@ $$ {#eq:sensitivity}
 
     <!-- Status Bar -->
     <footer id="app-statusbar">
-      <div class="status-item"><span class="status-indicator ready"></span> Ready</div>
-      <div class="status-item" id="status-project">Project: ENG-RX-001 (Rev A)</div>
+      <div class="status-item"><span class="status-indicator ready" id="status-bulb"></span> <span id="status-text">Ready</span></div>
+      <div class="status-item" id="status-project">Project: None</div>
+      <div class="status-item" id="status-dirty">Clean</div>
       <div class="status-item" id="status-tools">Tools: Checking...</div>
-      <div class="status-item flex-end">DOCX: Ready | PDF: Ready</div>
+      <div class="status-item flex-end" id="status-save-time">Last saved: Never</div>
     </footer>
+
+    <!-- New Project Dialog Modal (hidden by default) -->
+    <div id="modal-new-project" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span>Create New .mdoc Project</span>
+          <button class="icon-btn" id="modal-close-btn">×</button>
+        </div>
+        <div class="modal-body">
+          <label>Project Name</label>
+          <input type="text" id="modal-proj-name" class="input-text" placeholder="e.g. Radar Receiver Subsystem">
+          <label>Document Number</label>
+          <input type="text" id="modal-proj-docnum" class="input-text" placeholder="e.g. ENG-RX-001">
+          <label>Revision</label>
+          <input type="text" id="modal-proj-rev" class="input-text" value="A">
+        </div>
+        <div class="modal-footer">
+          <button id="modal-cancel-btn">Cancel</button>
+          <button id="modal-submit-btn" class="primary">Create Project</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New File Dialog Modal (hidden by default) -->
+    <div id="modal-new-file" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span>Add New Document</span>
+          <button class="icon-btn" id="modal-file-close-btn">×</button>
+        </div>
+        <div class="modal-body">
+          <label>Relative Path (in content/)</label>
+          <input type="text" id="modal-file-path" class="input-text" placeholder="e.g. content/analysis.md">
+        </div>
+        <div class="modal-footer">
+          <button id="modal-file-cancel-btn">Cancel</button>
+          <button id="modal-file-submit-btn" class="primary">Add File</button>
+        </div>
+      </div>
+    </div>
 
   </div>
 

@@ -78,3 +78,4 @@ Validates an existing `.mdoc` file or manifest structure.
 - `POST /api/documents/inspect`: Extracts heading hierarchy, bookmarks, content controls, and section layouts from a target `.docx`.
 - `POST /api/documents/patch/preview`: Dry-run patch preview returning diff metadata.
 - `POST /api/documents/patch`: Applies non-destructive patch (INSERT BEFORE, INSERT AFTER, REPLACE, APPEND) to target `.docx`.
+

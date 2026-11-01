@@ -23,3 +23,4 @@ class DirectiveParseError(EngDocError):
 class ExternalToolError(EngDocError):
     """Raised when an external tool (Pandoc, Inkscape, LibreOffice, Word) fails."""
     pass
+

@@ -26,3 +26,4 @@ uv run python scripts/doctor.py
 
 echo "=== Setup Complete! ==="
 echo "Launch dev server with: uv run uvicorn engdoc.api.app:app --reload --port 8000"
+

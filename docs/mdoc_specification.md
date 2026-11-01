@@ -96,3 +96,4 @@ build:
    - Corrupted ZIP archives, password-protected entries, or uncompressed malicious archives (ZIP bombs) must be detected and rejected during loading.
 4. **Encoding**:
    - File paths inside the ZIP archive must be UTF-8 encoded.
+

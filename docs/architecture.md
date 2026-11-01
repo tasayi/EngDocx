@@ -118,3 +118,4 @@ flowchart TD
   1. The figure subsystem maintains source files in SVG format.
   2. Assets are converted to EMF (Enhanced Metafile) via Inkscape CLI (`--export-type=emf`).
   3. If EMF conversion fails or Inkscape is not present, generate high-resolution PNG (300+ DPI) with physical dimension metadata (`w:extent` in OpenXML) so visual resolution is never compromised.
+

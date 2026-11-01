@@ -1,5 +1,7 @@
 """EngDoc FastAPI Application Entrypoint."""
 
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,14 @@ from fastapi.staticfiles import StaticFiles
 from engdoc.api.routes_projects import router as projects_router
 from engdoc.api.routes_system import router as system_router
 from engdoc.core.config import settings
+from engdoc.project.session import SessionManager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Cleanup any active temporary project session workspaces
+    SessionManager.close_all()
 
 
 def create_app() -> FastAPI:
@@ -17,6 +27,7 @@ def create_app() -> FastAPI:
         title=settings.APP_NAME,
         version=settings.VERSION,
         description="Engineering Document Authoring and Publishing System",
+        lifespan=lifespan,
     )
 
     # CORS configuration for local-first desktop usage

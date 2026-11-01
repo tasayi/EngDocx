@@ -11,3 +11,4 @@ export class FigureManagerUI {
     console.log("Loading project figures...");
   }
 }
+
