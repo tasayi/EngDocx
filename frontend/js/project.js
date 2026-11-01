@@ -705,6 +705,7 @@ export function initProjectManager() {
 
   // Publish Modal
   const btnPublishMenu = document.getElementById('btn-menu-publish');
+  const btnBuild = document.getElementById('btn-build');
   const modalPublish = document.getElementById('modal-publish');
   const modalPubClose = document.getElementById('modal-pub-close-btn');
   const modalPubCancel = document.getElementById('modal-pub-cancel-btn');
@@ -712,8 +713,8 @@ export function initProjectManager() {
   const pubStatusMsg = document.getElementById('pub-status-msg');
   const pubResultsLinks = document.getElementById('pub-results-links');
 
-  if (btnPublishMenu && modalPublish) {
-    btnPublishMenu.addEventListener('click', () => {
+  if (modalPublish) {
+    const openPublishModal = () => {
       if (!projectState.sessionId) {
         alert('Please create or open a project first.');
         return;
@@ -721,7 +722,10 @@ export function initProjectManager() {
       modalPublish.style.display = 'flex';
       if (pubStatusMsg) pubStatusMsg.textContent = '';
       if (pubResultsLinks) pubResultsLinks.innerHTML = '';
-    });
+    };
+
+    btnPublishMenu?.addEventListener('click', openPublishModal);
+    btnBuild?.addEventListener('click', openPublishModal);
 
     const closePubModal = () => (modalPublish.style.display = 'none');
     modalPubClose?.addEventListener('click', closePubModal);
@@ -788,3 +792,6 @@ export function initProjectManager() {
     });
   }
 }
+
+export const initProjectNavigator = initProjectManager;
+

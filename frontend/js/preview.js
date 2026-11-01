@@ -17,7 +17,7 @@ export function initPreviewPanel() {
     const isHidden = panelPreview.classList.contains("collapsed");
     if (isHidden) {
       panelPreview.classList.remove("collapsed");
-      if (resizerPreview) resizerPreview.style.display = "block";
+      if (resizerPreview) resizerPreview.style.display = "";
       if (btnToggleToolbar) btnToggleToolbar.classList.add("btn-accent");
     } else {
       panelPreview.classList.add("collapsed");

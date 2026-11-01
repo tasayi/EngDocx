@@ -2,7 +2,7 @@
  * EngDoc Main Application Coordinator
  */
 
-import { initProjectNavigator, projectState } from './project.js';
+import { initProjectManager, initProjectNavigator, projectState } from './project.js';
 import { initEditor } from './editor.js';
 import { initPropertiesPanel } from './properties.js';
 import { initPreviewPanel } from './preview.js';
@@ -16,23 +16,53 @@ class EngDocApp {
   async init() {
     console.log('EngDoc Studio Initializing...');
 
-    // Initialize CodeMirror 6 editor with document change listener
-    initEditor({
-      onDocChange: (newDoc, path) => {
-        projectState.onDocumentEdited(newDoc, path);
-      },
-    });
+    // 1. Initialize CodeMirror 6 editor with document change listener
+    try {
+      initEditor({
+        onDocChange: (newDoc, path) => {
+          projectState.onDocumentEdited(newDoc, path);
+        },
+      });
+    } catch (err) {
+      console.error('Editor initialization error:', err);
+    }
 
-    // Initialize Project Navigator & UI
-    initProjectNavigator();
-    initPropertiesPanel();
-    initPreviewPanel();
+    // 2. Initialize Project Navigator, Toolbar & UI dialogs
+    try {
+      initProjectManager();
+    } catch (err) {
+      console.error('Project Manager initialization error:', err);
+    }
 
-    // Check system diagnostics via backend
-    await this.fetchDiagnostics();
+    // 3. Initialize Properties Panel
+    try {
+      initPropertiesPanel();
+    } catch (err) {
+      console.error('Properties Panel initialization error:', err);
+    }
 
-    // Setup resizers
-    this.setupResizers();
+    // 4. Initialize Preview Panel
+    try {
+      initPreviewPanel();
+    } catch (err) {
+      console.error('Preview Panel initialization error:', err);
+    }
+
+    // 5. Setup resizers
+    try {
+      this.setupResizers();
+    } catch (err) {
+      console.warn('Resizers setup error:', err);
+    }
+
+    // 6. Check system diagnostics via backend
+    try {
+      await this.fetchDiagnostics();
+    } catch (err) {
+      console.warn('Diagnostics fetch error:', err);
+    }
+
+    console.log('EngDoc Studio Ready');
   }
 
   async fetchDiagnostics() {
@@ -45,14 +75,23 @@ class EngDocApp {
       const libreStatus = data.tools.libreoffice.available ? 'LibreOffice: OK' : 'LibreOffice: Missing';
       const wordStatus = data.tools.word_com.available ? 'Word COM: OK' : 'Word COM: N/A';
 
-      this.statusToolsEl.textContent = `Tools: ${pandocStatus} | ${libreStatus} | ${wordStatus}`;
-      if (!data.all_required_met) {
-        this.statusBulbEl.classList.remove('ready');
-        this.statusBulbEl.classList.add('warning');
+      if (this.statusToolsEl) {
+        this.statusToolsEl.textContent = `Tools: ${pandocStatus} | ${libreStatus} | ${wordStatus}`;
+      }
+      if (this.statusBulbEl) {
+        if (!data.all_required_met) {
+          this.statusBulbEl.classList.remove('ready');
+          this.statusBulbEl.classList.add('warning');
+        } else {
+          this.statusBulbEl.classList.add('ready');
+          this.statusBulbEl.classList.remove('warning');
+        }
       }
     } catch (err) {
       console.warn('Diagnostics fetch error:', err);
-      this.statusToolsEl.textContent = 'Tools: Diagnostic offline';
+      if (this.statusToolsEl) {
+        this.statusToolsEl.textContent = 'Tools: Diagnostic offline';
+      }
     }
   }
 
@@ -100,10 +139,38 @@ class EngDocApp {
         }
       });
     }
+
+    // Horizontal resizer for Preview
+    const resizerPreview = document.getElementById('resizer-preview');
+    const previewPanel = document.getElementById('panel-preview');
+    if (resizerPreview && previewPanel) {
+      let isResizing = false;
+      resizerPreview.addEventListener('mousedown', () => {
+        isResizing = true;
+        document.body.style.cursor = 'col-resize';
+      });
+      document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const newWidth = Math.max(200, Math.min(800, window.innerWidth - e.clientX));
+        previewPanel.style.width = `${newWidth}px`;
+      });
+      document.addEventListener('mouseup', () => {
+        if (isResizing) {
+          isResizing = false;
+          document.body.style.cursor = 'default';
+        }
+      });
+    }
   }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function startApp() {
   const app = new EngDocApp();
-  app.init();
-});
+  app.init().catch((err) => console.error('EngDoc initialization failed:', err));
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startApp);
+} else {
+  startApp();
+}

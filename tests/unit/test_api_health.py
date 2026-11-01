@@ -28,3 +28,18 @@ async def test_frontend_index_served(async_client: AsyncClient):
     response = await async_client.get("/")
     assert response.status_code == 200
     assert "EngDoc" in response.text
+
+
+@pytest.mark.asyncio
+async def test_frontend_static_scripts_served(async_client: AsyncClient):
+    scripts = ["/static/js/app.js", "/static/js/project.js", "/static/js/figures.js", "/static/js/preview.js"]
+    for path in scripts:
+        res = await async_client.get(path)
+        assert res.status_code == 200, f"Failed to fetch {path}"
+        assert len(res.text) > 0
+
+    # Verify project.js exports both initProjectManager and initProjectNavigator
+    proj_res = await async_client.get("/static/js/project.js")
+    assert "export function initProjectManager" in proj_res.text
+    assert "export const initProjectNavigator = initProjectManager" in proj_res.text
+
