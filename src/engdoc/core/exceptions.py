@@ -24,3 +24,7 @@ class ExternalToolError(EngDocError):
     """Raised when an external tool (Pandoc, Inkscape, LibreOffice, Word) fails."""
     pass
 
+class InvalidDocumentError(EngDocError):
+    """Raised when a Word DOCX document is corrupt, invalid, or cannot be parsed."""
+    pass
+
