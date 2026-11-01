@@ -53,3 +53,4 @@ class FigureService:
 
         # Emits Pandoc image with crossref ID and width attribute
         return f"\n![{caption}]({rel_compiled}){{#fig:{fig_id} width={width}}}\n"
+
