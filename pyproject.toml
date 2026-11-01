@@ -29,7 +29,7 @@ dev = [
 ]
 
 [project.scripts]
-engdoc = "engdoc.api.app:main"
+engdoc = "engdoc.cli.main:main"
 engdoc-doctor = "engdoc.core.diagnostics:main"
 
 [build-system]

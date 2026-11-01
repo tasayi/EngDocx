@@ -163,3 +163,4 @@ async def test_patch_nonexistent_anchor_raises_error(tmp_path: Path):
         )
 
     assert not out_path.exists()
+

@@ -47,6 +47,7 @@ Thumbs.db
 # EngDoc Runtime & Project artifacts
 *.mdoc.tmp*
 output/
+examples/output/
 build_cache/
 .cache/
 

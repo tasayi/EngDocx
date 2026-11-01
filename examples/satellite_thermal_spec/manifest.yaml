@@ -1,0 +1,8 @@
+mdoc_version: "1.0.0"
+project_name: "Satellite Thermal Control Subsystem Specification"
+document_number: "ENG-TCS-2026"
+revision: "B"
+entry_point: "content/main.md"
+template:
+  default: "default_engineering"
+

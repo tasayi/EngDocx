@@ -1,0 +1,8 @@
+figures:
+  FIG-001:
+    id: "FIG-001"
+    source: "figures/sensor_array.svg"
+    caption: "Thermal Sensor Telemetry Bus Architecture and Thermistor Placement"
+    width: "150mm"
+    alignment: "center"
+    source_hash: "f51147d289fcdd0060e15ab0cd7e3cbeaeed090cc46823f1c1f85013ced85868"
