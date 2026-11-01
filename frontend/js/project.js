@@ -18,15 +18,19 @@ class ProjectState {
     this.isProjectDirty = false;
     this.autoSaveTimer = null;
     this.archivePath = '';
+    this.fileHandle = null;
+    this.fileName = '';
     this.hasExplicitPath = false;
   }
 
-  async setSession(sessionId, manifest, tree, archivePath = '', hasExplicitPath = false) {
+  async setSession(sessionId, manifest, tree, archivePath = '', hasExplicitPath = false, fileHandle = null) {
     this.sessionId = sessionId;
     this.manifest = manifest;
     this.tree = tree;
     this.archivePath = archivePath || '';
     this.hasExplicitPath = hasExplicitPath || false;
+    this.fileHandle = fileHandle || null;
+    this.fileName = fileHandle ? fileHandle.name : (archivePath ? archivePath.split(/[/\\]/).pop() : '');
     this.isProjectDirty = false;
     this.openTabs.clear();
 
@@ -46,7 +50,8 @@ class ProjectState {
     const previewHeader = document.getElementById('preview-doc-header');
 
     if (this.manifest) {
-      projEl.textContent = `Project: ${this.manifest.project_name} (${this.manifest.document_number} Rev ${this.manifest.revision})`;
+      const fileBadge = this.fileName ? ` [${this.fileName}]` : '';
+      projEl.textContent = `Project: ${this.manifest.project_name} (${this.manifest.document_number} Rev ${this.manifest.revision})${fileBadge}`;
       if (previewHeader) {
         previewHeader.textContent = `${this.manifest.document_number} | Rev ${this.manifest.revision} – ${this.manifest.project_name}`;
       }
@@ -278,37 +283,82 @@ class ProjectState {
     }
   }
 
-  async saveProjectArchive(destinationPath = null) {
+  getSuggestedFilename() {
+    const docNum = this.manifest?.document_number || 'ENG-DOC';
+    const projName = (this.manifest?.project_name || 'Project').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${docNum}_${projName}.mdoc`;
+  }
+
+  async saveProject() {
     if (!this.sessionId) return;
     await this.saveCurrentDocument();
 
-    if (!destinationPath && !this.hasExplicitPath) {
-      // Prompt user with Save As dialog
-      const modalSave = document.getElementById('modal-save-project');
-      const inputSave = document.getElementById('modal-save-path-input');
-      if (modalSave && inputSave) {
-        const defaultName = `${this.manifest?.document_number || 'ENG-DOC'}_${(this.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
-        inputSave.value = this.archivePath || defaultName;
-        modalSave.style.display = 'flex';
-        inputSave.focus();
-        return;
+    // 1. If bound to an OS file handle (via showSaveFilePicker or showOpenFilePicker), overwrite directly
+    if (this.fileHandle) {
+      return await this._writeToHandle(this.fileHandle);
+    }
+
+    // 2. If bound to an explicit server path, overwrite directly
+    if (this.hasExplicitPath && this.archivePath) {
+      return await this._writeToServerPath(this.archivePath);
+    }
+
+    // 3. Newly created/untitled project -> First-time save triggers Save As dialog
+    return await this.saveProjectAs();
+  }
+
+  async saveProjectAs() {
+    if (!this.sessionId) return;
+    await this.saveCurrentDocument();
+
+    const suggestedName = this.fileName || this.getSuggestedFilename();
+
+    // 1. Modern File System Access API (Chromium/Chrome/Edge/Brave)
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: suggestedName,
+          types: [
+            {
+              description: 'EngDoc Project Archive (*.mdoc)',
+              accept: {
+                'application/zip': ['.mdoc'],
+                'application/x-mdoc': ['.mdoc'],
+              },
+            },
+          ],
+        });
+        if (!handle) return null;
+        return await this._writeToHandle(handle);
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          // User clicked Cancel in the OS file picker dialog
+          return null;
+        }
+        console.warn('Native showSaveFilePicker failed, falling back:', err);
       }
     }
 
+    // 2. Fallback for non-supported browsers or non-secure contexts
+    return await this._fallbackDownloadSave(suggestedName);
+  }
+
+  async _writeToHandle(handle) {
+    const statusText = document.getElementById('status-text');
+    if (statusText) statusText.textContent = `Saving to ${handle.name}...`;
+
     try {
-      const body = destinationPath ? JSON.stringify({ output_path: destinationPath }) : undefined;
-      const headers = body ? { 'Content-Type': 'application/json' } : undefined;
-      const res = await fetch(`/api/projects/${this.sessionId}/save`, {
-        method: 'POST',
-        headers: headers,
-        body: body,
-      });
+      const res = await fetch(`/api/projects/${this.sessionId}/download`);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        throw new Error(`Failed to pack project archive: HTTP ${res.status}`);
       }
-      const data = await res.json();
-      this.archivePath = data.archive_path;
+      const blob = await res.blob();
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+
+      this.fileHandle = handle;
+      this.fileName = handle.name;
       this.hasExplicitPath = true;
       this.isProjectDirty = false;
       this.updateStatus();
@@ -317,22 +367,106 @@ class ProjectState {
       if (saveTimeEl) {
         saveTimeEl.textContent = `Saved: ${new Date().toLocaleTimeString()}`;
       }
-
-      const statusText = document.getElementById('status-text');
       if (statusText) {
-        statusText.textContent = `Project saved: ${data.archive_path}`;
+        statusText.textContent = `Project saved: ${handle.name}`;
         setTimeout(() => {
           if (statusText.textContent.startsWith('Project saved')) {
             statusText.textContent = 'Ready';
           }
-        }, 5000);
+        }, 4000);
+      }
+      return { handle, fileName: handle.name };
+    } catch (err) {
+      console.error('File write to handle failed:', err);
+      alert(`Save failed: ${err.message}`);
+      if (statusText) statusText.textContent = `Save failed: ${err.message}`;
+      throw err;
+    }
+  }
+
+  async _writeToServerPath(path) {
+    const statusText = document.getElementById('status-text');
+    if (statusText) statusText.textContent = `Saving to ${path}...`;
+
+    try {
+      const res = await fetch(`/api/projects/${this.sessionId}/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ output_path: path }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.archivePath = data.archive_path;
+      this.fileName = data.archive_path.split(/[/\\]/).pop();
+      this.hasExplicitPath = true;
+      this.isProjectDirty = false;
+      this.updateStatus();
+
+      const saveTimeEl = document.getElementById('status-save-time');
+      if (saveTimeEl) {
+        saveTimeEl.textContent = `Saved: ${new Date().toLocaleTimeString()}`;
+      }
+      if (statusText) {
+        statusText.textContent = `Project saved: ${this.fileName}`;
+        setTimeout(() => {
+          if (statusText.textContent.startsWith('Project saved')) {
+            statusText.textContent = 'Ready';
+          }
+        }, 4000);
       }
       return data;
     } catch (err) {
-      console.error('Project archive save failed:', err);
+      console.error('Server save failed:', err);
       alert(`Save failed: ${err.message}`);
+      if (statusText) statusText.textContent = `Save failed: ${err.message}`;
       throw err;
     }
+  }
+
+  async _fallbackDownloadSave(suggestedName) {
+    const statusText = document.getElementById('status-text');
+    if (statusText) statusText.textContent = `Downloading ${suggestedName}...`;
+
+    try {
+      const dlLink = document.createElement('a');
+      dlLink.href = `/api/projects/${this.sessionId}/download`;
+      dlLink.download = suggestedName;
+      document.body.appendChild(dlLink);
+      dlLink.click();
+      document.body.removeChild(dlLink);
+
+      this.fileName = suggestedName;
+      this.hasExplicitPath = true;
+      this.isProjectDirty = false;
+      this.updateStatus();
+
+      const saveTimeEl = document.getElementById('status-save-time');
+      if (saveTimeEl) {
+        saveTimeEl.textContent = `Saved: ${new Date().toLocaleTimeString()}`;
+      }
+      if (statusText) {
+        statusText.textContent = `Project downloaded: ${suggestedName}`;
+        setTimeout(() => {
+          if (statusText.textContent.startsWith('Project downloaded')) {
+            statusText.textContent = 'Ready';
+          }
+        }, 4000);
+      }
+      return { fileName: suggestedName };
+    } catch (err) {
+      alert(`Download failed: ${err.message}`);
+      throw err;
+    }
+  }
+
+  async saveProjectArchive(destinationPath = null) {
+    if (destinationPath) {
+      return await this._writeToServerPath(destinationPath);
+    }
+    return await this.saveProject();
   }
 
   async createNewFile(path) {
@@ -497,8 +631,51 @@ export function initProjectManager() {
     modalOpenClose?.addEventListener('click', closeOpenModal);
     modalOpenCancel?.addEventListener('click', closeOpenModal);
 
-    btnBrowseOpenFile?.addEventListener('click', () => {
-      inputOpenFile?.click();
+    btnBrowseOpenFile?.addEventListener('click', async () => {
+      if (typeof window.showOpenFilePicker === 'function') {
+        try {
+          const [handle] = await window.showOpenFilePicker({
+            types: [
+              {
+                description: 'EngDoc Project Archive (*.mdoc)',
+                accept: {
+                  'application/zip': ['.mdoc'],
+                  'application/x-mdoc': ['.mdoc'],
+                },
+              },
+            ],
+            multiple: false,
+          });
+          if (!handle) return;
+          const file = await handle.getFile();
+          const formData = new FormData();
+          formData.append('file', file);
+          const res = await fetch('/api/projects/upload', {
+            method: 'POST',
+            body: formData,
+          });
+          if (!res.ok) {
+            const errData = await res.json();
+            throw new Error(errData.detail || `HTTP ${res.status}`);
+          }
+          const opened = await res.json();
+          closeOpenModal();
+          await projectState.setSession(
+            opened.session_id,
+            opened.manifest,
+            opened.tree,
+            '',
+            true,
+            handle
+          );
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            alert(`Failed to open project: ${err.message}`);
+          }
+        }
+      } else {
+        inputOpenFile?.click();
+      }
     });
 
     inputOpenFile?.addEventListener('change', async (e) => {
@@ -520,6 +697,8 @@ export function initProjectManager() {
         const opened = await res.json();
         closeOpenModal();
         await projectState.setSession(opened.session_id, opened.manifest, opened.tree, '', false);
+        projectState.fileName = file.name;
+        projectState.updateStatus();
       } catch (err) {
         alert(`Failed to open uploaded project: ${err.message}`);
       } finally {
@@ -576,59 +755,21 @@ export function initProjectManager() {
   const btnSave = document.getElementById('menu-item-save');
   const btnSaveAs = document.getElementById('menu-item-save-as');
   const btnPublishFile = document.getElementById('menu-item-publish-file');
-  const modalSave = document.getElementById('modal-save-project');
-  const modalSaveClose = document.getElementById('modal-save-close-btn');
-  const modalSaveCancel = document.getElementById('modal-save-cancel-btn');
-  const modalSaveSubmit = document.getElementById('modal-save-submit-btn');
-  const modalSaveInput = document.getElementById('modal-save-path-input');
-  const modalSaveStatus = document.getElementById('modal-save-status');
 
-  const openSaveAsModal = () => {
-    if (!projectState.sessionId) {
-      alert('Please create or open a project first.');
-      return;
-    }
-    if (modalSave && modalSaveInput) {
-      const defaultName = `${projectState.manifest?.document_number || 'ENG-DOC'}_${(projectState.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
-      modalSaveInput.value = projectState.archivePath || defaultName;
-      if (modalSaveStatus) modalSaveStatus.textContent = '';
-      modalSave.style.display = 'flex';
-      modalSaveInput.focus();
-    }
-  };
-
-  btnSave?.addEventListener('click', () => {
-    projectState.saveProjectArchive();
+  btnSave?.addEventListener('click', async () => {
+    await projectState.saveProject();
   });
 
-  btnSaveAs?.addEventListener('click', openSaveAsModal);
+  btnSaveAs?.addEventListener('click', async () => {
+    await projectState.saveProjectAs();
+  });
+
   btnPublishFile?.addEventListener('click', openPublishModal);
 
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
-      projectState.saveProjectArchive();
-    }
-  });
-
-  const closeSaveModal = () => {
-    if (modalSave) modalSave.style.display = 'none';
-  };
-  modalSaveClose?.addEventListener('click', closeSaveModal);
-  modalSaveCancel?.addEventListener('click', closeSaveModal);
-
-  modalSaveSubmit?.addEventListener('click', async () => {
-    const customPath = modalSaveInput?.value.trim();
-    if (!customPath) {
-      alert('Please enter a destination path.');
-      return;
-    }
-    if (modalSaveStatus) modalSaveStatus.textContent = 'Saving archive...';
-    try {
-      await projectState.saveProjectArchive(customPath);
-      closeSaveModal();
-    } catch (err) {
-      if (modalSaveStatus) modalSaveStatus.textContent = `Save failed: ${err.message}`;
+      projectState.saveProject();
     }
   });
 
