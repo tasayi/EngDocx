@@ -135,6 +135,19 @@ class ProjectState {
   async openDocument(path) {
     if (!this.sessionId) return;
 
+    // Flush currently active document before switching away
+    if (this.activeTab && this.activeTab !== path && this.openTabs.has(this.activeTab)) {
+      const outgoing = this.openTabs.get(this.activeTab);
+      const liveText = getContent();
+      if (outgoing.content !== liveText) {
+        outgoing.content = liveText;
+        outgoing.isDirty = true;
+      }
+      if (outgoing.isDirty) {
+        await this.saveCurrentDocument();
+      }
+    }
+
     if (!this.openTabs.has(path)) {
       try {
         const res = await fetch(`/api/projects/${this.sessionId}/file?path=${encodeURIComponent(path)}`);
@@ -234,9 +247,14 @@ class ProjectState {
     this.renderTree();
   }
 
+  onDocumentEdited(newContent, path) {
+    this.onContentChange(newContent, path);
+  }
+
   onContentChange(newContent, path) {
-    if (!path || !this.openTabs.has(path)) return;
-    const tab = this.openTabs.get(path);
+    const targetPath = path || this.activeTab;
+    if (!targetPath || !this.openTabs.has(targetPath)) return;
+    const tab = this.openTabs.get(targetPath);
     if (tab.content !== newContent) {
       tab.content = newContent;
       tab.isDirty = true;
@@ -249,13 +267,18 @@ class ProjectState {
       if (this.autoSaveTimer) clearTimeout(this.autoSaveTimer);
       this.autoSaveTimer = setTimeout(() => {
         this.saveCurrentDocument();
-      }, 2500);
+      }, 1500);
     }
   }
 
   async saveCurrentDocument() {
     if (!this.sessionId || !this.activeTab) return;
     const tab = this.openTabs.get(this.activeTab);
+    const liveText = getContent();
+    if (tab && tab.content !== liveText) {
+      tab.content = liveText;
+      tab.isDirty = true;
+    }
     if (!tab || !tab.isDirty) return;
 
     try {
@@ -264,7 +287,7 @@ class ProjectState {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: tab.path,
-          content: getContent(),
+          content: tab.content,
         }),
       });
 
@@ -283,6 +306,48 @@ class ProjectState {
     }
   }
 
+  async saveAllDirtyDocuments() {
+    if (!this.sessionId) return;
+    // 1. Sync live CodeMirror editor text into active tab object
+    if (this.activeTab && this.openTabs.has(this.activeTab)) {
+      const activeTabObj = this.openTabs.get(this.activeTab);
+      const liveText = getContent();
+      if (activeTabObj.content !== liveText) {
+        activeTabObj.content = liveText;
+        activeTabObj.isDirty = true;
+      }
+    }
+
+    // 2. Commit every dirty tab to the session workspace on server
+    const savePromises = [];
+    for (const [, tab] of this.openTabs.entries()) {
+      if (tab.isDirty) {
+        savePromises.push(
+          fetch(`/api/projects/${this.sessionId}/file`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              path: tab.path,
+              content: tab.content,
+            }),
+          }).then((res) => {
+            if (res.ok) {
+              tab.isDirty = false;
+            }
+          })
+        );
+      }
+    }
+
+    if (savePromises.length > 0) {
+      await Promise.all(savePromises);
+    }
+
+    this.isProjectDirty = Array.from(this.openTabs.values()).some((t) => t.isDirty);
+    this.renderTabs();
+    this.updateStatus();
+  }
+
   getSuggestedFilename() {
     const docNum = this.manifest?.document_number || 'ENG-DOC';
     const projName = (this.manifest?.project_name || 'Project').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -291,7 +356,7 @@ class ProjectState {
 
   async saveProject() {
     if (!this.sessionId) return;
-    await this.saveCurrentDocument();
+    await this.saveAllDirtyDocuments();
 
     // 1. If bound to an OS file handle (via showSaveFilePicker or showOpenFilePicker), overwrite directly
     if (this.fileHandle) {
@@ -309,7 +374,7 @@ class ProjectState {
 
   async saveProjectAs() {
     if (!this.sessionId) return;
-    await this.saveCurrentDocument();
+    await this.saveAllDirtyDocuments();
 
     const suggestedName = this.fileName || this.getSuggestedFilename();
 
@@ -904,7 +969,7 @@ export function initProjectManager() {
         alert('Please create or open a project first.');
         return;
       }
-      await projectState.saveCurrentDocument();
+      await projectState.saveAllDirtyDocuments();
       btnBuild.disabled = true;
       const originalText = btnBuild.textContent;
       btnBuild.textContent = '⏳ Building...';
@@ -994,6 +1059,12 @@ export function initProjectManager() {
     modalPubCancel?.addEventListener('click', closePubModal);
 
     modalPubSubmit?.addEventListener('click', async () => {
+      if (!projectState.sessionId) {
+        alert('Please create or open a project first.');
+        return;
+      }
+      await projectState.saveAllDirtyDocuments();
+
       const wantDocx = document.getElementById('pub-format-docx')?.checked;
       const wantPdf = document.getElementById('pub-format-pdf')?.checked;
       const customFilename = document.getElementById('modal-pub-filename')?.value.trim() || null;
