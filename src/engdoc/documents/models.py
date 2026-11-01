@@ -104,3 +104,4 @@ class DocxInspectionResult(BaseModel):
     sections: list[SectionGeometryInfo] = Field(default_factory=list)
     tables: list[TableSummary] = Field(default_factory=list)
     metadata: DocxMetadata = Field(default_factory=DocxMetadata)
+

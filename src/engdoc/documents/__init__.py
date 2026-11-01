@@ -13,9 +13,19 @@ from engdoc.documents.models import (
     SectionGeometryInfo,
     TableSummary,
 )
+from engdoc.documents.patch_models import (
+    AnchorType,
+    PatchAction,
+    PatchExecutionResult,
+    PatchPreviewResult,
+    PatchRequest,
+    PatchTarget,
+)
+from engdoc.documents.patcher import DocxPatcher
 
 __all__ = [
     "DocxInspector",
+    "DocxPatcher",
     "HeadingItem",
     "BookmarkItem",
     "ContentControlItem",
@@ -23,4 +33,10 @@ __all__ = [
     "TableSummary",
     "DocxMetadata",
     "DocxInspectionResult",
+    "PatchAction",
+    "AnchorType",
+    "PatchTarget",
+    "PatchRequest",
+    "PatchPreviewResult",
+    "PatchExecutionResult",
 ]

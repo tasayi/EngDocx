@@ -1,0 +1,526 @@
+"""Microsoft Word (.docx) Surgical Modification and Patch Engine.
+
+Performs high-fidelity, non-destructive insertion, replacement, and appending
+of compiled EMD content into existing Word documents anchored to Bookmarks,
+Headings, Content Controls (SDT), or document terminals.
+"""
+
+import copy
+import tempfile
+import time
+import zipfile
+from pathlib import Path
+from typing import Any
+
+from lxml import etree
+
+from engdoc.compiler.runner import PandocRunner
+from engdoc.core.exceptions import (
+    EngDocError,
+    InvalidDocumentError,
+    PatchTargetNotFoundError,
+)
+from engdoc.documents.inspector import NAMESPACES, DocxInspector
+from engdoc.documents.patch_models import (
+    AnchorType,
+    PatchAction,
+    PatchExecutionResult,
+    PatchPreviewResult,
+    PatchTarget,
+)
+
+NS_W = NAMESPACES["w"]
+NS_R = NAMESPACES["r"]
+
+
+class DocxPatcher:
+    """Non-destructive surgical patching engine for Word (.docx) documents."""
+
+    @classmethod
+    async def preview_patch(
+        cls,
+        target_docx: Path,
+        action: PatchAction,
+        target: PatchTarget,
+        emd_text: str,
+    ) -> PatchPreviewResult:
+        """Performs a dry-run analysis of a patch operation without modifying any files.
+
+        Validates whether the target anchor exists and counts the XML elements that
+        would be inserted.
+        """
+        if not target_docx.is_file():
+            return PatchPreviewResult(
+                valid=False,
+                anchor_found=False,
+                action=action,
+                message=f"Target document does not exist: {target_docx}",
+            )
+
+        try:
+            # 1. Compile EMD snippet to count body elements
+            snippet_elements, _, _ = await cls._compile_snippet_to_elements(emd_text)
+
+            # 2. Inspect target document to locate anchor
+            inspection = DocxInspector.inspect_file(target_docx)
+            anchor_found = False
+            anchor_details: dict[str, Any] = {}
+
+            if target.anchor_type == AnchorType.END_OF_DOCUMENT:
+                anchor_found = True
+                anchor_details = {
+                    "type": "END_OF_DOCUMENT",
+                    "total_sections": len(inspection.sections),
+                    "total_paragraphs": inspection.paragraph_count,
+                }
+            elif target.anchor_type == AnchorType.BOOKMARK:
+                for bm in inspection.bookmarks:
+                    matched = (
+                        bm.name == target.anchor_name
+                        if target.exact_match
+                        else bm.name.lower() == target.anchor_name.lower()
+                    )
+                    if matched:
+                        anchor_found = True
+                        anchor_details = {
+                            "type": "BOOKMARK",
+                            "name": bm.name,
+                            "id": bm.id,
+                            "paragraph_index": bm.paragraph_index,
+                            "surrounding_text": bm.surrounding_text,
+                            "is_system": bm.is_system,
+                        }
+                        break
+            elif target.anchor_type == AnchorType.HEADING:
+                for h in inspection.headings:
+                    matched = (
+                        h.text == target.anchor_name
+                        if target.exact_match
+                        else target.anchor_name.lower() in h.text.lower()
+                    )
+                    if matched:
+                        anchor_found = True
+                        anchor_details = {
+                            "type": "HEADING",
+                            "level": h.level,
+                            "text": h.text,
+                            "paragraph_index": h.paragraph_index,
+                            "style_name": h.style_name,
+                        }
+                        break
+            elif target.anchor_type == AnchorType.CONTENT_CONTROL:
+                for sdt in inspection.content_controls:
+                    matched_tag = (
+                        sdt.tag == target.anchor_name
+                        if target.exact_match
+                        else sdt.tag.lower() == target.anchor_name.lower()
+                    )
+                    matched_alias = (
+                        sdt.alias == target.anchor_name
+                        if target.exact_match
+                        else sdt.alias.lower() == target.anchor_name.lower()
+                    )
+                    if matched_tag or matched_alias:
+                        anchor_found = True
+                        anchor_details = {
+                            "type": "CONTENT_CONTROL",
+                            "tag": sdt.tag,
+                            "alias": sdt.alias,
+                            "text": sdt.text,
+                            "lock_type": sdt.lock_type,
+                        }
+                        break
+
+            return PatchPreviewResult(
+                valid=anchor_found,
+                anchor_found=anchor_found,
+                anchor_details=anchor_details,
+                action=action,
+                elements_to_insert_count=len(snippet_elements),
+                message=(
+                    f"Anchor '{target.anchor_name or target.anchor_type.value}' found; "
+                    f"ready to {action.value} {len(snippet_elements)} elements."
+                    if anchor_found
+                    else f"Target anchor '{target.anchor_name}' of type {target.anchor_type.value} not found."
+                ),
+            )
+        except Exception as e:
+            return PatchPreviewResult(
+                valid=False,
+                anchor_found=False,
+                action=action,
+                message=f"Preview analysis error: {e}",
+            )
+
+    @classmethod
+    async def apply_patch(
+        cls,
+        target_docx: Path,
+        output_docx: Path,
+        action: PatchAction,
+        target: PatchTarget,
+        emd_text: str,
+        workspace_dir: Path | None = None,
+    ) -> PatchExecutionResult:
+        """Surgically modifies target_docx by injecting compiled EMD elements.
+
+        Preserves all headers, footers, styles, macros, and relationships.
+        Never overwrites target_docx; writes result strictly to output_docx.
+        """
+        start_time = time.perf_counter()
+        target_path = Path(target_docx).resolve()
+        output_path = Path(output_docx).resolve()
+
+        if not target_path.is_file():
+            raise InvalidDocumentError(f"Target document does not exist: {target_path}")
+
+        if not zipfile.is_zipfile(target_path):
+            raise InvalidDocumentError(f"Target file is not a valid zip archive: {target_path}")
+
+        # 1. Compile EMD snippet into XML body elements and media assets
+        snippet_elements, snippet_rels, snippet_media = (
+            await cls._compile_snippet_to_elements(emd_text, workspace_dir=workspace_dir)
+        )
+
+        if not snippet_elements and action != PatchAction.REPLACE:
+            raise EngDocError("Compiled snippet yielded no body elements to insert.")
+
+        # 2. Open target document and parse word/document.xml and relationships
+        with zipfile.ZipFile(target_path, "r") as zf:
+            namelist = set(zf.namelist())
+            if "word/document.xml" not in namelist:
+                raise InvalidDocumentError("Malformed DOCX: missing word/document.xml")
+
+            target_doc_tree = etree.fromstring(zf.read("word/document.xml"))
+            body_elem = target_doc_tree.find(f"{{{NS_W}}}body")
+            if body_elem is None:
+                raise InvalidDocumentError("Malformed DOCX: missing <w:body>")
+
+            # Parse target rels
+            rels_filename = "word/_rels/document.xml.rels"
+            target_rels_tree = None
+            if rels_filename in namelist:
+                try:
+                    target_rels_tree = etree.fromstring(zf.read(rels_filename))
+                except Exception:
+                    pass
+
+            # 3. Locate anchor element in target_doc_tree
+            anchor_node = cls._locate_anchor(body_elem, target)
+            if anchor_node is None and target.anchor_type != AnchorType.END_OF_DOCUMENT:
+                raise PatchTargetNotFoundError(
+                    f"Target anchor '{target.anchor_name}' of type {target.anchor_type.value} was not found."
+                )
+
+            # 4. Perform surgical DOM modification based on requested action
+            cls._splice_elements(
+                body_elem=body_elem,
+                anchor_node=anchor_node,
+                snippet_elements=snippet_elements,
+                action=action,
+                target=target,
+            )
+
+            # 5. Merge snippet relationships into target relationships
+            merged_media: dict[str, bytes] = {}
+            if snippet_rels and target_rels_tree is not None:
+                cls._merge_relationships(
+                    target_rels_tree=target_rels_tree,
+                    snippet_rels=snippet_rels,
+                    snippet_elements=snippet_elements,
+                    snippet_media=snippet_media,
+                    merged_media=merged_media,
+                )
+
+            # 6. Write patched document atomically to output_docx
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as out_zf:
+                for item in zf.infolist():
+                    if item.filename == "word/document.xml":
+                        doc_xml = etree.tostring(
+                            target_doc_tree,
+                            xml_declaration=True,
+                            encoding="utf-8",
+                            standalone=True,
+                        )
+                        out_zf.writestr(item, doc_xml)
+                    elif item.filename == rels_filename and target_rels_tree is not None:
+                        rels_xml = etree.tostring(
+                            target_rels_tree,
+                            xml_declaration=True,
+                            encoding="utf-8",
+                            standalone=True,
+                        )
+                        out_zf.writestr(item, rels_xml)
+                    else:
+                        out_zf.writestr(item, zf.read(item.filename))
+
+                # Add new media items from snippet
+                for media_name, media_data in merged_media.items():
+                    out_zf.writestr(f"word/media/{media_name}", media_data)
+
+        duration = time.perf_counter() - start_time
+
+        # Calculate summary statistics
+        paragraphs_inserted = sum(1 for el in snippet_elements if el.tag == f"{{{NS_W}}}p")
+        tables_inserted = sum(1 for el in snippet_elements if el.tag == f"{{{NS_W}}}tbl")
+
+        return PatchExecutionResult(
+            success=True,
+            original_filename=target_path.name,
+            patched_filename=output_path.name,
+            output_path=str(output_path),
+            action=action,
+            target_anchor=target.anchor_name or target.anchor_type.value,
+            duration_seconds=round(duration, 3),
+            stats={
+                "elements_inserted": len(snippet_elements),
+                "paragraphs_inserted": paragraphs_inserted,
+                "tables_inserted": tables_inserted,
+            },
+        )
+
+    @classmethod
+    async def _compile_snippet_to_elements(
+        cls, emd_text: str, workspace_dir: Path | None = None
+    ) -> tuple[list[etree._Element], list[etree._Element], dict[str, bytes]]:
+        """Compiles an EMD text snippet into OpenXML body elements, relationships, and media."""
+        if not emd_text.strip():
+            return [], [], {}
+
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_out:
+            tmp_out_docx = Path(tmp_out.name)
+
+        try:
+            res = await PandocRunner.compile_to_docx(
+                markdown_text=emd_text,
+                output_path=tmp_out_docx,
+                cwd=workspace_dir,
+            )
+            if not res.success or not tmp_out_docx.is_file():
+                raise EngDocError(f"Failed to compile patch snippet: {res.error_message}")
+
+            elements: list[etree._Element] = []
+            rels: list[etree._Element] = []
+            media_files: dict[str, bytes] = {}
+
+            with zipfile.ZipFile(tmp_out_docx, "r") as zf:
+                # Read body elements
+                frag_doc_tree = etree.fromstring(zf.read("word/document.xml"))
+                frag_body = frag_doc_tree.find(f"{{{NS_W}}}body")
+                if frag_body is not None:
+                    for child in frag_body:
+                        # Exclude terminal sectPr
+                        if child.tag != f"{{{NS_W}}}sectPr":
+                            elements.append(copy.deepcopy(child))
+
+                # Read relationships
+                if "word/_rels/document.xml.rels" in zf.namelist():
+                    frag_rels_tree = etree.fromstring(
+                        zf.read("word/_rels/document.xml.rels")
+                    )
+                    rels = [copy.deepcopy(r) for r in frag_rels_tree]
+
+                # Read media files
+                for name in zf.namelist():
+                    if name.startswith("word/media/"):
+                        m_name = Path(name).name
+                        media_files[m_name] = zf.read(name)
+
+            return elements, rels, media_files
+        finally:
+            if tmp_out_docx.exists():
+                tmp_out_docx.unlink()
+
+    @classmethod
+    def _locate_anchor(
+        cls, body_elem: etree._Element, target: PatchTarget
+    ) -> etree._Element | None:
+        """Locates the DOM element matching the specified target anchor."""
+        if target.anchor_type == AnchorType.END_OF_DOCUMENT:
+            # Anchor at the terminal section break
+            terminal_sect = body_elem.find(f"{{{NS_W}}}sectPr")
+            if terminal_sect is not None:
+                return terminal_sect
+            # Fallback to last child in body
+            return body_elem[-1] if len(body_elem) > 0 else None
+
+        if target.anchor_type == AnchorType.BOOKMARK:
+            for bm in body_elem.xpath(".//w:bookmarkStart", namespaces=NAMESPACES):
+                name = bm.get(f"{{{NS_W}}}name", "")
+                matched = (
+                    name == target.anchor_name
+                    if target.exact_match
+                    else name.lower() == target.anchor_name.lower()
+                )
+                if matched:
+                    # Return containing paragraph or node itself
+                    curr: etree._Element = bm
+                    while curr is not None and curr.getparent() is not None:
+                        if curr.getparent() == body_elem:
+                            return curr
+                        curr = curr.getparent()
+                    return bm
+
+        elif target.anchor_type == AnchorType.HEADING:
+            for p in body_elem.xpath(".//w:p", namespaces=NAMESPACES):
+                p_text = "".join(p.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
+                matched = (
+                    p_text == target.anchor_name
+                    if target.exact_match
+                    else target.anchor_name.lower() in p_text.lower()
+                )
+                if matched:
+                    return p
+
+        elif target.anchor_type == AnchorType.CONTENT_CONTROL:
+            for sdt in body_elem.xpath(".//w:sdt", namespaces=NAMESPACES):
+                tag_node = sdt.find(f".//{{{NS_W}}}tag")
+                alias_node = sdt.find(f".//{{{NS_W}}}alias")
+                tag_val = tag_node.get(f"{{{NS_W}}}val", "") if tag_node is not None else ""
+                alias_val = (
+                    alias_node.get(f"{{{NS_W}}}val", "") if alias_node is not None else ""
+                )
+
+                matched_tag = (
+                    tag_val == target.anchor_name
+                    if target.exact_match
+                    else tag_val.lower() == target.anchor_name.lower()
+                )
+                matched_alias = (
+                    alias_val == target.anchor_name
+                    if target.exact_match
+                    else alias_val.lower() == target.anchor_name.lower()
+                )
+                if matched_tag or matched_alias:
+                    return sdt
+
+        return None
+
+    @classmethod
+    def _splice_elements(
+        cls,
+        body_elem: etree._Element,
+        anchor_node: etree._Element | None,
+        snippet_elements: list[etree._Element],
+        action: PatchAction,
+        target: PatchTarget,
+    ) -> None:
+        """Executes the DOM mutation according to the selected PatchAction."""
+        if action == PatchAction.APPEND or target.anchor_type == AnchorType.END_OF_DOCUMENT:
+            # If terminal sectPr is present, insert before it; else append to body
+            terminal_sect = body_elem.find(f"{{{NS_W}}}sectPr")
+            if terminal_sect is not None:
+                for el in snippet_elements:
+                    terminal_sect.addprevious(copy.deepcopy(el))
+            else:
+                for el in snippet_elements:
+                    body_elem.append(copy.deepcopy(el))
+            return
+
+        if anchor_node is None:
+            raise PatchTargetNotFoundError(
+                f"Anchor element not found for {target.anchor_name}"
+            )
+
+        if action == PatchAction.INSERT_BEFORE:
+            for el in snippet_elements:
+                anchor_node.addprevious(copy.deepcopy(el))
+
+        elif action == PatchAction.INSERT_AFTER:
+            curr = anchor_node
+            for el in snippet_elements:
+                copied = copy.deepcopy(el)
+                curr.addnext(copied)
+                curr = copied
+
+        elif action == PatchAction.REPLACE:
+            # If anchor is a content control (w:sdt), replace inner content
+            if anchor_node.tag == f"{{{NS_W}}}sdt":
+                sdt_content = anchor_node.find(f"{{{NS_W}}}sdtContent")
+                if sdt_content is not None:
+                    # Clear existing sdtContent
+                    for child in list(sdt_content):
+                        sdt_content.remove(child)
+                    for el in snippet_elements:
+                        sdt_content.append(copy.deepcopy(el))
+                else:
+                    # Replace entire sdt element
+                    curr = anchor_node
+                    for el in snippet_elements:
+                        copied = copy.deepcopy(el)
+                        curr.addnext(copied)
+                        curr = copied
+                    anchor_node.getparent().remove(anchor_node)
+            else:
+                # Replace anchor element with snippet elements
+                curr = anchor_node
+                for el in snippet_elements:
+                    copied = copy.deepcopy(el)
+                    curr.addnext(copied)
+                    curr = copied
+                anchor_node.getparent().remove(anchor_node)
+
+    @classmethod
+    def _merge_relationships(
+        cls,
+        target_rels_tree: etree._Element,
+        snippet_rels: list[etree._Element],
+        snippet_elements: list[etree._Element],
+        snippet_media: dict[str, bytes],
+        merged_media: dict[str, bytes],
+    ) -> None:
+        """Merges snippet relationships and media references without ID collisions."""
+        # Find all existing relationship IDs in target
+        existing_ids: set[str] = set()
+        for r in target_rels_tree:
+            rid = r.get("Id")
+            if rid:
+                existing_ids.add(rid)
+
+        counter = 1000
+        for s_rel in snippet_rels:
+            old_id = s_rel.get("Id")
+            if not old_id:
+                continue
+
+            target_val = s_rel.get("Target", "")
+            type_val = s_rel.get("Type", "")
+
+            # Generate collision-free ID
+            while f"rIdPatch{counter}" in existing_ids:
+                counter += 1
+            new_id = f"rIdPatch{counter}"
+            counter += 1
+            existing_ids.add(new_id)
+
+            # If media item, check if filename needs renaming to avoid overwrite
+            final_target = target_val
+            if "media/" in target_val:
+                src_filename = Path(target_val).name
+                if src_filename in snippet_media:
+                    final_target = f"media/patch_{counter}_{src_filename}"
+                    merged_media[f"patch_{counter}_{src_filename}"] = snippet_media[src_filename]
+
+            # Update relationship in snippet elements
+            for el in snippet_elements:
+                # Update attributes with namespace r:id or r:embed
+                for node in el.xpath(".//*[@*]", namespaces=NAMESPACES):
+                    for attr_name, attr_val in list(node.attrib.items()):
+                        if attr_val == old_id:
+                            node.attrib[attr_name] = new_id
+
+            # Create new Relationship element in target rels
+            new_rel = etree.Element(
+                s_rel.tag,
+                {
+                    "Id": new_id,
+                    "Type": type_val,
+                    "Target": final_target,
+                },
+            )
+            target_mode = s_rel.get("TargetMode")
+            if target_mode:
+                new_rel.set("TargetMode", target_mode)
+
+            target_rels_tree.append(new_rel)

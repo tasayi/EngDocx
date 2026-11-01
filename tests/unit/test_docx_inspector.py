@@ -36,14 +36,15 @@ def create_rich_test_docx(file_path: Path) -> Path:
     sec0.bottom_margin = Inches(1)
 
     # Heading 1
-    doc.add_heading("1. Executive Summary", level=1)
-    p1 = doc.add_paragraph("This document outlines the satellite electrical power budget.")
+    h1 = doc.add_heading("1. Executive Summary", level=1)
 
-    # Add Bookmark inside p1
+    # Add Bookmark on Heading 1
     bm_start = etree.Element(f"{{{NS_W}}}bookmarkStart", {f"{{{NS_W}}}id": "10", f"{{{NS_W}}}name": "BM_EXEC_SUMMARY"})
     bm_end = etree.Element(f"{{{NS_W}}}bookmarkEnd", {f"{{{NS_W}}}id": "10"})
-    p1._p.insert(0, bm_start)
-    p1._p.append(bm_end)
+    h1._p.insert(0, bm_start)
+    h1._p.append(bm_end)
+
+    p1 = doc.add_paragraph("This document outlines the satellite electrical power budget.")
 
     # Add System Bookmark
     bm_sys = etree.Element(f"{{{NS_W}}}bookmarkStart", {f"{{{NS_W}}}id": "11", f"{{{NS_W}}}name": "_GoBack"})

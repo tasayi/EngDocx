@@ -1,15 +1,27 @@
 """Document Inspection and Analysis API Routes."""
 
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 
-from engdoc.core.exceptions import EngDocError, InvalidDocumentError, ProjectArchiveError
+from engdoc.core.exceptions import (
+    EngDocError,
+    InvalidDocumentError,
+    PatchTargetNotFoundError,
+    ProjectArchiveError,
+)
 from engdoc.documents.inspector import DocxInspector
 from engdoc.documents.models import DocxInspectionResult
+from engdoc.documents.patch_models import (
+    PatchExecutionResult,
+    PatchPreviewResult,
+    PatchRequest,
+)
+from engdoc.documents.patcher import DocxPatcher
 from engdoc.project.session import SessionManager
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
@@ -188,3 +200,109 @@ def _inspect_path_or_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Inspection failed: {e}",
         ) from e
+
+
+@router.post("/patch/preview", response_model=PatchPreviewResult)
+async def preview_document_patch(req: PatchRequest) -> PatchPreviewResult:
+    """Performs dry-run inspection of a patch operation without modifying the document."""
+    target_path, content_md, _ = _resolve_patch_context(req)
+
+    return await DocxPatcher.preview_patch(
+        target_docx=target_path,
+        action=req.action,
+        target=req.target,
+        emd_text=content_md,
+    )
+
+
+@router.post("/patch", response_model=PatchExecutionResult)
+async def apply_document_patch(req: PatchRequest) -> PatchExecutionResult:
+    """Applies a non-destructive surgical patch to an existing Word document."""
+    target_path, content_md, session = _resolve_patch_context(req)
+
+    # Determine safe output path
+    base_name = req.output_filename or f"{target_path.stem}_patched_{int(time.time())}.docx"
+    if not base_name.lower().endswith(".docx"):
+        base_name += ".docx"
+
+    if session:
+        output_dir = session.workspace_dir / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_file = output_dir / base_name
+        download_url = f"/api/compile/download/{session.session_id}/{base_name}"
+        workspace_dir = session.workspace_dir
+    else:
+        out_file = target_path.parent / base_name
+        download_url = None
+        workspace_dir = None
+
+    try:
+        res = await DocxPatcher.apply_patch(
+            target_docx=target_path,
+            output_docx=out_file,
+            action=req.action,
+            target=req.target,
+            emd_text=content_md,
+            workspace_dir=workspace_dir,
+        )
+        if download_url:
+            res.download_url = download_url
+        return res
+    except PatchTargetNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except InvalidDocumentError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except EngDocError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Patch execution failed: {e}",
+        ) from e
+
+
+def _resolve_patch_context(
+    req: PatchRequest,
+) -> tuple[Path, str, Any]:
+    """Validates and resolves the target document path, content markdown, and session."""
+    session = None
+    target_path: Path | None = None
+
+    if req.session_id:
+        try:
+            session = SessionManager.get_session(req.session_id)
+        except ProjectArchiveError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+        # If an absolute path is provided and exists on disk, allow it
+        p = Path(req.target_document_path)
+        if p.is_absolute() and p.is_file():
+            target_path = p
+        else:
+            clean_rel = req.target_document_path.lstrip("/\\")
+            candidate = (session.workspace_dir / clean_rel).resolve()
+            if not candidate.is_relative_to(session.workspace_dir.resolve()):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Target path outside session workspace: {req.target_document_path}",
+                )
+            target_path = candidate
+    else:
+        target_path = Path(req.target_document_path).resolve()
+
+    if not target_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target document not found: {target_path}",
+        )
+
+    # Resolve content markdown
+    content_md = req.content_markdown or ""
+    if not content_md and req.content_file_path and session:
+        clean_file = req.content_file_path.lstrip("/\\")
+        cand_file = (session.workspace_dir / clean_file).resolve()
+        if cand_file.is_file() and cand_file.is_relative_to(session.workspace_dir.resolve()):
+            content_md = cand_file.read_text(encoding="utf-8")
+
+    return target_path, content_md, session
+

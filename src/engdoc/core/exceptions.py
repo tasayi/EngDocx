@@ -28,3 +28,8 @@ class InvalidDocumentError(EngDocError):
     """Raised when a Word DOCX document is corrupt, invalid, or cannot be parsed."""
     pass
 
+class PatchTargetNotFoundError(EngDocError):
+    """Raised when an anchor (bookmark, heading, content control) for patching is not found."""
+    pass
+
+
