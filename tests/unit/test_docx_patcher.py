@@ -164,3 +164,98 @@ async def test_patch_nonexistent_anchor_raises_error(tmp_path: Path):
 
     assert not out_path.exists()
 
+
+@pytest.mark.asyncio
+async def test_preview_complete_section_replacement(tmp_path: Path):
+    doc_path = tmp_path / "baseline_sec_preview.docx"
+    create_rich_test_docx(doc_path)
+
+    preview_res = await DocxPatcher.preview_patch(
+        target_docx=doc_path,
+        action=PatchAction.REPLACE,
+        target=PatchTarget(
+            anchor_type=AnchorType.HEADING,
+            anchor_name="1.1 Architecture & Solar Array Sizing",
+            scope="complete_section",
+        ),
+        emd_text="### 1.1 Updated Solar Panels\n\nNew Gallium Arsenide cell efficiency: 32%.",
+    )
+
+    assert preview_res.valid is True
+    assert preview_res.anchor_found is True
+    assert preview_res.elements_to_delete_count >= 3  # Heading, paragraph, SDT, table
+    assert "Solar array output" in preview_res.original_section_text
+    assert "Subsystem" in preview_res.original_section_text
+    assert "1.1 Architecture" in preview_res.boundary_start
+    assert "2. Wide Schematic" in preview_res.boundary_end
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_complete_section(tmp_path: Path):
+    doc_path = tmp_path / "baseline_sec_replace.docx"
+    out_path = tmp_path / "patched_sec_replace.docx"
+    create_rich_test_docx(doc_path)
+
+    exec_res = await DocxPatcher.apply_patch(
+        target_docx=doc_path,
+        output_docx=out_path,
+        action=PatchAction.REPLACE,
+        target=PatchTarget(
+            anchor_type=AnchorType.HEADING,
+            anchor_name="1.1 Architecture & Solar Array Sizing",
+            scope="complete_section",
+            replace_heading=True,
+        ),
+        emd_text="## 1.1 Modernized Photovoltaic Arrays\n\nHigh efficiency triple-junction GaAs arrays installed.",
+    )
+
+    assert exec_res.success is True
+    assert exec_res.elements_deleted_count >= 3
+    assert out_path.is_file()
+
+    # Inspect patched document
+    inspection = DocxInspector.inspect_file(out_path)
+    heading_texts = [h.text for h in inspection.headings]
+
+    # Old heading replaced with new heading
+    assert "1.1 Architecture & Solar Array Sizing" not in heading_texts
+    assert "1.1 Modernized Photovoltaic Arrays" in heading_texts
+
+    # Heading 1 and Section 2 heading remain intact
+    assert "1. Executive Summary" in heading_texts
+    assert "2. Wide Schematic Matrices" in heading_texts
+
+    # The table inside 1.1 should have been removed
+    # In original, there were tables; in Section 1 there was 1 table.
+    assert len(inspection.tables) == 0
+
+
+@pytest.mark.asyncio
+async def test_patch_replace_complete_section_preserve_heading(tmp_path: Path):
+    doc_path = tmp_path / "baseline_sec_preserve.docx"
+    out_path = tmp_path / "patched_sec_preserve.docx"
+    create_rich_test_docx(doc_path)
+
+    exec_res = await DocxPatcher.apply_patch(
+        target_docx=doc_path,
+        output_docx=out_path,
+        action=PatchAction.REPLACE,
+        target=PatchTarget(
+            anchor_type=AnchorType.HEADING,
+            anchor_name="1.1 Architecture & Solar Array Sizing",
+            scope="complete_section",
+            replace_heading=False,
+        ),
+        emd_text="Upgraded battery storage capacity: 120 Ah LiFePO4 cells.",
+    )
+
+    assert exec_res.success is True
+    inspection = DocxInspector.inspect_file(out_path)
+    heading_texts = [h.text for h in inspection.headings]
+
+    # Original heading must still be present
+    assert "1.1 Architecture & Solar Array Sizing" in heading_texts
+    assert "1. Executive Summary" in heading_texts
+    assert "2. Wide Schematic Matrices" in heading_texts
+
+

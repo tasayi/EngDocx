@@ -6,6 +6,7 @@ import { initProjectManager, initProjectNavigator, projectState } from './projec
 import { initEditor } from './editor.js';
 import { initPropertiesPanel } from './properties.js';
 import { initPreviewPanel } from './preview.js';
+import { initDocumentPatchUI } from './patch.js';
 
 class EngDocApp {
   constructor() {
@@ -48,14 +49,21 @@ class EngDocApp {
       console.error('Preview Panel initialization error:', err);
     }
 
-    // 5. Setup resizers
+    // 5. Initialize Document Section Patch Subsystem
+    try {
+      initDocumentPatchUI();
+    } catch (err) {
+      console.error('Document Patch UI initialization error:', err);
+    }
+
+    // 6. Setup resizers
     try {
       this.setupResizers();
     } catch (err) {
       console.warn('Resizers setup error:', err);
     }
 
-    // 6. Check system diagnostics via backend
+    // 7. Check system diagnostics via backend
     try {
       await this.fetchDiagnostics();
     } catch (err) {

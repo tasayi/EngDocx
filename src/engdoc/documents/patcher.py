@@ -6,6 +6,7 @@ Headings, Content Controls (SDT), or document terminals.
 """
 
 import copy
+import re
 import tempfile
 import time
 import zipfile
@@ -131,18 +132,57 @@ class DocxPatcher:
                         }
                         break
 
+            # 3. Analyze XML DOM for section boundary and text extraction
+            elements_to_delete_count = 0
+            original_section_text = ""
+            boundary_start = ""
+            boundary_end = ""
+
+            if anchor_found or target.anchor_type == AnchorType.END_OF_DOCUMENT:
+                try:
+                    with zipfile.ZipFile(target_docx, "r") as zf:
+                        if "word/document.xml" in zf.namelist():
+                            doc_tree = etree.fromstring(zf.read("word/document.xml"))
+                            body_elem = doc_tree.find(f"{{{NS_W}}}body")
+                            if body_elem is not None:
+                                anchor_node = cls._locate_anchor(body_elem, target)
+                                if anchor_node is not None:
+                                    anchor_found = True
+                                    els_to_rem, orig_txt, b_start, b_end = cls._collect_section_elements(
+                                        body_elem, anchor_node, target
+                                    )
+                                    elements_to_delete_count = len(els_to_rem)
+                                    original_section_text = orig_txt
+                                    boundary_start = b_start
+                                    boundary_end = b_end
+                except Exception:
+                    pass
+
+            if target.scope in ("complete_section", "range") and anchor_found:
+                message = (
+                    f"Section '{target.anchor_name or target.anchor_type.value}' found "
+                    f"(bounds: '{boundary_start}' to '{boundary_end}'). "
+                    f"Ready to replace {elements_to_delete_count} element(s) with {len(snippet_elements)} compiled element(s)."
+                )
+            else:
+                message = (
+                    f"Anchor '{target.anchor_name or target.anchor_type.value}' found; "
+                    f"ready to {action.value} {len(snippet_elements)} elements."
+                    if anchor_found
+                    else f"Target anchor '{target.anchor_name}' of type {target.anchor_type.value} not found."
+                )
+
             return PatchPreviewResult(
                 valid=anchor_found,
                 anchor_found=anchor_found,
                 anchor_details=anchor_details,
                 action=action,
                 elements_to_insert_count=len(snippet_elements),
-                message=(
-                    f"Anchor '{target.anchor_name or target.anchor_type.value}' found; "
-                    f"ready to {action.value} {len(snippet_elements)} elements."
-                    if anchor_found
-                    else f"Target anchor '{target.anchor_name}' of type {target.anchor_type.value} not found."
-                ),
+                elements_to_delete_count=elements_to_delete_count,
+                original_section_text=original_section_text,
+                boundary_start=boundary_start,
+                boundary_end=boundary_end,
+                message=message,
             )
         except Exception as e:
             return PatchPreviewResult(
@@ -213,7 +253,7 @@ class DocxPatcher:
                 )
 
             # 4. Perform surgical DOM modification based on requested action
-            cls._splice_elements(
+            elements_deleted = cls._splice_elements(
                 body_elem=body_elem,
                 anchor_node=anchor_node,
                 snippet_elements=snippet_elements,
@@ -272,9 +312,11 @@ class DocxPatcher:
             output_path=str(output_path),
             action=action,
             target_anchor=target.anchor_name or target.anchor_type.value,
+            elements_deleted_count=elements_deleted,
             duration_seconds=round(duration, 3),
             stats={
                 "elements_inserted": len(snippet_elements),
+                "elements_deleted": elements_deleted,
                 "paragraphs_inserted": paragraphs_inserted,
                 "tables_inserted": tables_inserted,
             },
@@ -367,11 +409,15 @@ class DocxPatcher:
                 p_text = "".join(p.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
                 matched = (
                     p_text == target.anchor_name
+                    or (target.exact_match and (p_text.startswith(target.anchor_name + " ") or p_text.startswith(target.anchor_name + "\t")))
                     if target.exact_match
                     else target.anchor_name.lower() in p_text.lower()
                 )
                 if matched:
-                    return p
+                    curr = p
+                    while curr is not None and curr.getparent() is not None and curr.getparent() != body_elem:
+                        curr = curr.getparent()
+                    return curr if curr is not None and curr.getparent() == body_elem else p
 
         elif target.anchor_type == AnchorType.CONTENT_CONTROL:
             for sdt in body_elem.xpath(".//w:sdt", namespaces=NAMESPACES):
@@ -398,6 +444,137 @@ class DocxPatcher:
         return None
 
     @classmethod
+    def _get_heading_level(cls, p: etree._Element) -> int | None:
+        """Determines the 1-based heading level (1-9) of a paragraph element."""
+        if p.tag != f"{{{NS_W}}}p":
+            return None
+
+        # 1. Check explicit outline level on the paragraph
+        outline_elem = p.xpath("./w:pPr/w:outlineLvl", namespaces=NAMESPACES)
+        if outline_elem:
+            try:
+                lvl = int(outline_elem[0].get(f"{{{NS_W}}}val", "-1")) + 1
+                if 1 <= lvl <= 9:
+                    return lvl
+            except (ValueError, TypeError):
+                pass
+
+        # 2. Check style name or style ID (e.g. Heading 1, heading 2, Heading1)
+        p_style_elem = p.xpath("./w:pPr/w:pStyle", namespaces=NAMESPACES)
+        if p_style_elem:
+            style_val = p_style_elem[0].get(f"{{{NS_W}}}val", "")
+            m = re.search(r"heading\s*(\d)", style_val, flags=re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+
+        # 3. Text prefix fallback for numbered headings: e.g. "3.1", "3.1.2"
+        p_text = "".join(p.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
+        m_num = re.match(r"^(\d+(?:\.\d+)*)(?:\s+|\t|$)", p_text)
+        if m_num:
+            parts = [seg for seg in m_num.group(1).split(".") if seg]
+            if parts:
+                return min(len(parts), 9)
+
+        return None
+
+    @classmethod
+    def _element_to_text(cls, elem: etree._Element) -> str:
+        """Extracts human-readable text from a paragraph, table, or content control."""
+        if elem.tag == f"{{{NS_W}}}p":
+            return "".join(elem.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
+        elif elem.tag == f"{{{NS_W}}}tbl":
+            rows: list[str] = []
+            for tr in elem.xpath(".//w:tr", namespaces=NAMESPACES):
+                cells: list[str] = []
+                for tc in tr.xpath(".//w:tc", namespaces=NAMESPACES):
+                    cell_text = " ".join("".join(tc.xpath(".//w:t/text()", namespaces=NAMESPACES)).split())
+                    cells.append(cell_text)
+                if cells:
+                    rows.append("| " + " | ".join(cells) + " |")
+            return "\n".join(rows)
+        elif elem.tag == f"{{{NS_W}}}sdt":
+            return "".join(elem.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
+        return "".join(elem.xpath(".//w:t/text()", namespaces=NAMESPACES)).strip()
+
+    @classmethod
+    def _collect_section_elements(
+        cls,
+        body_elem: etree._Element,
+        anchor_node: etree._Element,
+        target: PatchTarget,
+    ) -> tuple[list[etree._Element], str, str, str]:
+        """Collects the XML elements that constitute the section or range to be replaced."""
+        curr: etree._Element = anchor_node
+        while curr is not None and curr.getparent() is not None and curr.getparent() != body_elem:
+            curr = curr.getparent()
+        top_anchor = curr if curr is not None and curr.getparent() == body_elem else anchor_node
+
+        body_children = list(body_elem)
+        try:
+            start_idx = body_children.index(top_anchor)
+        except ValueError:
+            return ([top_anchor], cls._element_to_text(top_anchor), target.anchor_name, target.anchor_name)
+
+        if target.scope == "single_node":
+            text = cls._element_to_text(top_anchor)
+            return ([top_anchor], text, text or target.anchor_name, text or target.anchor_name)
+
+        # Determine target heading level
+        start_level: int | None = cls._get_heading_level(top_anchor)
+        if start_level is None:
+            m = re.match(r"^(\d+(?:\.\d+)*)", target.anchor_name.strip())
+            if m:
+                start_level = len([s for s in m.group(1).split(".") if s])
+            else:
+                start_level = 1
+
+        span_elements: list[etree._Element] = []
+        boundary_start_text = cls._element_to_text(top_anchor) or target.anchor_name
+        boundary_end_text = "[End of Document]"
+
+        for child in body_children[start_idx + 1:]:
+            # Stop at terminal section properties
+            if child.tag == f"{{{NS_W}}}sectPr":
+                boundary_end_text = "[Section Break / End of Document]"
+                break
+
+            # Range mode: stop at specified end anchor
+            if target.scope == "range" and target.end_anchor_name:
+                child_text = cls._element_to_text(child)
+                matched_end = (
+                    child_text == target.end_anchor_name
+                    if target.exact_match
+                    else target.end_anchor_name.lower() in child_text.lower()
+                )
+                if matched_end:
+                    boundary_end_text = child_text
+                    break
+
+            # Complete section mode: stop when encountering a heading with level <= start_level
+            if target.scope == "complete_section":
+                if child.tag == f"{{{NS_W}}}p":
+                    child_lvl = cls._get_heading_level(child)
+                    if child_lvl is not None and child_lvl <= start_level:
+                        boundary_end_text = cls._element_to_text(child)
+                        break
+
+            span_elements.append(child)
+
+        if target.replace_heading:
+            elements_to_remove = [top_anchor] + span_elements
+        else:
+            elements_to_remove = span_elements
+
+        lines: list[str] = []
+        for el in elements_to_remove:
+            txt = cls._element_to_text(el)
+            if txt:
+                lines.append(txt)
+        original_text = "\n\n".join(lines)
+
+        return elements_to_remove, original_text, boundary_start_text, boundary_end_text
+
+    @classmethod
     def _splice_elements(
         cls,
         body_elem: etree._Element,
@@ -405,8 +582,11 @@ class DocxPatcher:
         snippet_elements: list[etree._Element],
         action: PatchAction,
         target: PatchTarget,
-    ) -> None:
-        """Executes the DOM mutation according to the selected PatchAction."""
+    ) -> int:
+        """Executes the DOM mutation according to the selected PatchAction.
+
+        Returns the number of deleted XML elements.
+        """
         if action == PatchAction.APPEND or target.anchor_type == AnchorType.END_OF_DOCUMENT:
             # If terminal sectPr is present, insert before it; else append to body
             terminal_sect = body_elem.find(f"{{{NS_W}}}sectPr")
@@ -416,7 +596,7 @@ class DocxPatcher:
             else:
                 for el in snippet_elements:
                     body_elem.append(copy.deepcopy(el))
-            return
+            return 0
 
         if anchor_node is None:
             raise PatchTargetNotFoundError(
@@ -426,6 +606,7 @@ class DocxPatcher:
         if action == PatchAction.INSERT_BEFORE:
             for el in snippet_elements:
                 anchor_node.addprevious(copy.deepcopy(el))
+            return 0
 
         elif action == PatchAction.INSERT_AFTER:
             curr = anchor_node
@@ -433,17 +614,49 @@ class DocxPatcher:
                 copied = copy.deepcopy(el)
                 curr.addnext(copied)
                 curr = copied
+            return 0
 
         elif action == PatchAction.REPLACE:
+            if target.scope in ("complete_section", "range"):
+                elements_to_remove, _, _, _ = cls._collect_section_elements(
+                    body_elem=body_elem,
+                    anchor_node=anchor_node,
+                    target=target,
+                )
+                top_anchor = elements_to_remove[0] if elements_to_remove else anchor_node
+
+                if target.replace_heading:
+                    for el in snippet_elements:
+                        top_anchor.addprevious(copy.deepcopy(el))
+                    for el in elements_to_remove:
+                        parent = el.getparent()
+                        if parent is not None:
+                            parent.remove(el)
+                    return len(elements_to_remove)
+                else:
+                    curr = anchor_node
+                    for el in snippet_elements:
+                        copied = copy.deepcopy(el)
+                        curr.addnext(copied)
+                        curr = copied
+                    for el in elements_to_remove:
+                        parent = el.getparent()
+                        if parent is not None:
+                            parent.remove(el)
+                    return len(elements_to_remove)
+
+            # Single node replacement
             # If anchor is a content control (w:sdt), replace inner content
             if anchor_node.tag == f"{{{NS_W}}}sdt":
                 sdt_content = anchor_node.find(f"{{{NS_W}}}sdtContent")
                 if sdt_content is not None:
                     # Clear existing sdtContent
+                    count_removed = len(list(sdt_content))
                     for child in list(sdt_content):
                         sdt_content.remove(child)
                     for el in snippet_elements:
                         sdt_content.append(copy.deepcopy(el))
+                    return count_removed
                 else:
                     # Replace entire sdt element
                     curr = anchor_node
@@ -452,6 +665,7 @@ class DocxPatcher:
                         curr.addnext(copied)
                         curr = copied
                     anchor_node.getparent().remove(anchor_node)
+                    return 1
             else:
                 # Replace anchor element with snippet elements
                 curr = anchor_node
@@ -460,6 +674,8 @@ class DocxPatcher:
                     curr.addnext(copied)
                     curr = copied
                 anchor_node.getparent().remove(anchor_node)
+                return 1
+        return 0
 
     @classmethod
     def _merge_relationships(

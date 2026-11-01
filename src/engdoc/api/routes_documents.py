@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 
 from engdoc.core.exceptions import (
@@ -41,6 +41,23 @@ class InspectDocumentRequest(BaseModel):
     file_path: str | None = Field(
         default=None, description="Direct absolute path on disk"
     )
+
+
+class UploadTargetResponse(BaseModel):
+    """Response model for uploaded target document inspection."""
+
+    success: bool = True
+    target_document_path: str
+    filename: str
+    inspection: DocxInspectionResult
+
+
+class WorkspaceTargetItem(BaseModel):
+    """Word document found in session workspace."""
+
+    path: str
+    filename: str
+    size_bytes: int
 
 
 @router.post("/inspect", response_model=DocxInspectionResult)
@@ -200,6 +217,94 @@ def _inspect_path_or_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Inspection failed: {e}",
         ) from e
+
+
+@router.post("/upload-target", response_model=UploadTargetResponse)
+async def upload_document_target(
+    file: UploadFile = File(..., description="Target Word .docx document"),
+    session_id: str | None = Form(None),
+) -> UploadTargetResponse:
+    """Uploads an existing Word document to be used as a patch target.
+
+    Saves the file into the project session uploads directory (or temporary storage),
+    then inspects it and returns available anchors and headings for section replacement.
+    """
+    filename = file.filename or "target_document.docx"
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only Microsoft Word .docx files are supported. Received: {filename}",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_SIZE // (1024 * 1024)} MB.",
+        )
+
+    if session_id:
+        try:
+            session = SessionManager.get_session(session_id)
+            save_dir = session.workspace_dir / "uploads"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / filename
+            rel_path = f"uploads/{filename}"
+        except ProjectArchiveError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    else:
+        save_dir = Path(tempfile.gettempdir()) / "engdoc_targets"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        save_path = save_dir / f"{int(time.time())}_{filename}"
+        rel_path = str(save_path)
+
+    save_path.write_bytes(content)
+
+    try:
+        inspection = DocxInspector.inspect_file(save_path)
+    except InvalidDocumentError as e:
+        if save_path.exists():
+            save_path.unlink()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        if save_path.exists():
+            save_path.unlink()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Inspection failed: {e}",
+        ) from e
+
+    return UploadTargetResponse(
+        success=True,
+        target_document_path=rel_path,
+        filename=filename,
+        inspection=inspection,
+    )
+
+
+@router.get("/workspace-targets/{session_id}", response_model=list[WorkspaceTargetItem])
+async def list_workspace_targets(session_id: str) -> list[WorkspaceTargetItem]:
+    """Lists all available Word (.docx) documents in the session workspace."""
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    workspace = session.workspace_dir.resolve()
+    targets: list[WorkspaceTargetItem] = []
+    for docx_path in workspace.rglob("*.docx"):
+        if docx_path.name.startswith("~$") or docx_path.name.startswith("."):
+            continue
+        rel = docx_path.relative_to(workspace).as_posix()
+        targets.append(
+            WorkspaceTargetItem(
+                path=rel,
+                filename=docx_path.name,
+                size_bytes=docx_path.stat().st_size,
+            )
+        )
+    targets.sort(key=lambda x: x.path.lower())
+    return targets
 
 
 @router.post("/patch/preview", response_model=PatchPreviewResult)

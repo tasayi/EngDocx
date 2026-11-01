@@ -1,7 +1,7 @@
 """Data models for Word DOCX document patching and modification."""
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,18 @@ class PatchTarget(BaseModel):
     exact_match: bool = Field(
         default=True,
         description="Whether to match heading text or tag name exactly or case-insensitively",
+    )
+    scope: Literal["single_node", "complete_section", "range"] = Field(
+        default="single_node",
+        description="Scope of replacement: 'single_node', 'complete_section', or 'range'",
+    )
+    end_anchor_name: str | None = Field(
+        default=None,
+        description="Ending boundary anchor name for range scope",
+    )
+    replace_heading: bool = Field(
+        default=True,
+        description="Whether to replace the target heading paragraph itself when scope is complete_section",
     )
 
 
@@ -82,6 +94,22 @@ class PatchPreviewResult(BaseModel):
         default=0,
         description="Number of XML body elements (paragraphs, tables) compiled from markdown",
     )
+    elements_to_delete_count: int = Field(
+        default=0,
+        description="Number of existing XML body elements that will be removed",
+    )
+    original_section_text: str = Field(
+        default="",
+        description="Text content of the original target section/range being replaced",
+    )
+    boundary_start: str = Field(
+        default="",
+        description="Summary text or identifier of the start boundary",
+    )
+    boundary_end: str = Field(
+        default="",
+        description="Summary text or identifier of the ending boundary (e.g. next heading or EOF)",
+    )
     message: str = Field(default="", description="Informational message or error summary")
 
 
@@ -97,6 +125,10 @@ class PatchExecutionResult(BaseModel):
     output_path: str = Field(..., description="Absolute or session-relative output path on disk")
     action: PatchAction = Field(..., description="Action that was applied")
     target_anchor: str = Field(..., description="Target anchor identifier")
+    elements_deleted_count: int = Field(
+        default=0,
+        description="Number of existing XML body elements removed during the patch",
+    )
     duration_seconds: float = Field(default=0.0, description="Execution time in seconds")
     stats: dict[str, int] = Field(
         default_factory=dict,

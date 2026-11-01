@@ -5,6 +5,7 @@
 import { loadContent, getContent, getActivePath, insertSnippet } from './editor.js';
 import { requestPreviewUpdate } from './preview.js';
 import { FigureManagerUI } from './figures.js';
+import { openDocumentPatchDialog } from './patch.js';
 
 const figureManager = new FigureManagerUI();
 
@@ -249,6 +250,20 @@ class ProjectState {
 
   onDocumentEdited(newContent, path) {
     this.onContentChange(newContent, path);
+  }
+
+  getActiveDocument() {
+    if (!this.activeTab || !this.openTabs.has(this.activeTab)) {
+      const liveText = getContent();
+      return liveText ? { path: 'untitled.md', name: 'untitled.md', content: liveText } : null;
+    }
+    const tab = this.openTabs.get(this.activeTab);
+    const liveText = getContent();
+    return {
+      path: tab.path,
+      name: tab.name,
+      content: liveText || tab.content || '',
+    };
   }
 
   onContentChange(newContent, path) {
@@ -830,6 +845,12 @@ export function initProjectManager() {
   });
 
   btnPublishFile?.addEventListener('click', openPublishModal);
+
+  // Section Compare & Patch DOCX triggers
+  const btnMenuPatchDoc = document.getElementById('menu-item-patch-doc');
+  const btnMenuPatchDocFile = document.getElementById('menu-item-patch-doc-file');
+  btnMenuPatchDoc?.addEventListener('click', () => openDocumentPatchDialog());
+  btnMenuPatchDocFile?.addEventListener('click', () => openDocumentPatchDialog());
 
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
