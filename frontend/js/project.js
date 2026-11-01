@@ -3,6 +3,7 @@
  */
 
 import { loadContent, getContent, getActivePath, insertSnippet } from './editor.js';
+import { requestPreviewUpdate } from './preview.js';
 
 class ProjectState {
   constructor() {
@@ -137,6 +138,7 @@ class ProjectState {
     this.activeTab = path;
     const tabData = this.openTabs.get(path);
     loadContent(tabData.content, path);
+    requestPreviewUpdate(this.sessionId, tabData.content);
 
     this.renderTabs();
     this.highlightTreeItem(path);
@@ -196,6 +198,7 @@ class ProjectState {
       this.isProjectDirty = true;
       this.renderTabs();
       this.updateStatus();
+      requestPreviewUpdate(this.sessionId, newContent);
 
       // Debounce auto-save to session workspace
       this.scheduleAutoSave();
@@ -496,4 +499,89 @@ export function initProjectNavigator() {
       inputUploadFig.value = '';
     }
   });
+
+  // Publish Modal
+  const btnPublishMenu = document.querySelector('[data-action="publish"]');
+  const modalPublish = document.getElementById('modal-publish');
+  const modalPubClose = document.getElementById('modal-pub-close-btn');
+  const modalPubCancel = document.getElementById('modal-pub-cancel-btn');
+  const modalPubSubmit = document.getElementById('modal-pub-submit-btn');
+  const pubStatusMsg = document.getElementById('pub-status-msg');
+  const pubResultsLinks = document.getElementById('pub-results-links');
+
+  if (btnPublishMenu && modalPublish) {
+    btnPublishMenu.addEventListener('click', () => {
+      if (!projectState.sessionId) {
+        alert('Please create or open a project first.');
+        return;
+      }
+      modalPublish.style.display = 'flex';
+      if (pubStatusMsg) pubStatusMsg.textContent = '';
+      if (pubResultsLinks) pubResultsLinks.innerHTML = '';
+    });
+
+    const closePubModal = () => (modalPublish.style.display = 'none');
+    modalPubClose?.addEventListener('click', closePubModal);
+    modalPubCancel?.addEventListener('click', closePubModal);
+
+    modalPubSubmit?.addEventListener('click', async () => {
+      const wantDocx = document.getElementById('pub-format-docx')?.checked;
+      const wantPdf = document.getElementById('pub-format-pdf')?.checked;
+      const customFilename = document.getElementById('modal-pub-filename')?.value.trim() || null;
+
+      const formats = [];
+      if (wantDocx) formats.push('docx');
+      if (wantPdf) formats.push('pdf');
+
+      if (formats.length === 0) {
+        alert('Please select at least one format (DOCX or PDF).');
+        return;
+      }
+
+      if (pubStatusMsg) pubStatusMsg.textContent = '⚙️ Publishing document(s)...';
+      if (pubResultsLinks) pubResultsLinks.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/compile/publish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: projectState.sessionId,
+            formats: formats,
+            output_filename: customFilename,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const report = await res.json();
+        if (pubStatusMsg) {
+          pubStatusMsg.textContent = `Published successfully in ${report.duration_seconds}s!`;
+        }
+
+        if (pubResultsLinks) {
+          if (report.docx_download_url) {
+            const aDocx = document.createElement('a');
+            aDocx.className = 'btn-sm btn-accent';
+            aDocx.href = report.docx_download_url;
+            aDocx.download = report.docx_filename;
+            aDocx.textContent = `📥 Download ${report.docx_filename}`;
+            pubResultsLinks.appendChild(aDocx);
+          }
+          if (report.pdf_download_url) {
+            const aPdf = document.createElement('a');
+            aPdf.className = 'btn-sm btn-accent';
+            aPdf.href = report.pdf_download_url;
+            aPdf.download = report.pdf_filename;
+            aPdf.textContent = `📥 Download ${report.pdf_filename}`;
+            pubResultsLinks.appendChild(aPdf);
+          }
+        }
+      } catch (err) {
+        console.error('Publishing failed:', err);
+        if (pubStatusMsg) pubStatusMsg.textContent = `Failed: ${err.message}`;
+      }
+    });
+  }
 }
