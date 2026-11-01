@@ -1,8 +1,10 @@
 """Project Management API Routes."""
 
+import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from engdoc.core.exceptions import EngDocError, ProjectArchiveError, SecurityPathError
@@ -94,6 +96,51 @@ async def open_existing_project(req: OpenProjectRequest) -> OpenProjectResponse:
             detail=f"Failed to open archive: {e}",
         ) from e
 
+
+@router.post("/upload", response_model=OpenProjectResponse)
+async def upload_and_open_project(
+    file: UploadFile = File(..., description=".mdoc archive to open"),
+) -> OpenProjectResponse:
+    """Uploads an .mdoc project archive directly from the user's browser and opens it."""
+    filename = file.filename or "project.mdoc"
+    if not filename.lower().endswith((".mdoc", ".zip")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Uploaded file must be a .mdoc archive. Received: {filename}",
+        )
+
+    content = await file.read()
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Project archive exceeds 100 MB limit.",
+        )
+
+    with tempfile.NamedTemporaryFile(suffix=".mdoc", delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        session = SessionManager.open_session(tmp_path)
+        tree = session.get_tree()
+        return OpenProjectResponse(
+            success=True,
+            session_id=session.session_id,
+            manifest=session.manifest,
+            tree=tree,
+        )
+    except EngDocError as e:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to unpack uploaded project: {e}",
+        ) from e
+
 @router.get("/{session_id}/tree", response_model=ResourceTreeResponse)
 async def get_project_tree(session_id: str) -> ResourceTreeResponse:
     """Retrieves the current resource tree of documents, figures, templates, and metadata."""
@@ -175,6 +222,27 @@ async def save_project_to_archive(session_id: str, output_path: str | None = Non
         )
     except ProjectArchiveError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+
+@router.get("/{session_id}/download")
+async def download_project_archive(session_id: str) -> FileResponse:
+    """Commits any pending edits and streams the .mdoc project archive directly to the client browser."""
+    try:
+        session = SessionManager.get_session(session_id)
+        saved_archive = session.save()
+        filename = f"{session.manifest.document_number}_{session.manifest.project_name.replace(' ', '_')}.mdoc"
+        return FileResponse(
+            path=saved_archive,
+            media_type="application/zip",
+            filename=filename,
+        )
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to prepare project download: {e}",
+        ) from e
 
 @router.get("/{session_id}/status", response_model=SessionStatusResponse)
 async def get_session_status(session_id: str) -> SessionStatusResponse:

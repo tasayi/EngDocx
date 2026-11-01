@@ -84,3 +84,17 @@ async def test_compile_docx_api_endpoint(async_client: AsyncClient, tmp_path: Pa
     assert download_res.status_code == 200
     assert len(download_res.content) > 1000  # Valid DOCX payload
     assert download_res.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+
+@pytest.mark.asyncio
+async def test_list_templates_api_endpoint(async_client: AsyncClient):
+    res = await async_client.get("/api/compile/templates")
+    assert res.status_code == 200
+    data = res.json()
+    assert "templates" in data
+    assert isinstance(data["templates"], list)
+    assert len(data["templates"]) >= 1
+    assert any("default" in t for t in data["templates"])
+
+
+

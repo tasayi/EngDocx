@@ -21,14 +21,31 @@
       <nav class="toolbar-menu">
         <button class="menu-btn" id="btn-new-proj" title="Create New Project">New</button>
         <button class="menu-btn" id="btn-open-proj" title="Open .mdoc Project">Open</button>
-        <button class="menu-btn" data-action="insert">Insert</button>
-        <button class="menu-btn" data-action="layout">Layout</button>
-        <button class="menu-btn" data-action="figures">Figures</button>
-        <button class="menu-btn" data-action="templates">Templates</button>
-        <button class="menu-btn primary" data-action="publish">Publish</button>
+        <input type="file" id="input-open-file" accept=".mdoc,.zip" style="display: none;">
+        
+        <div class="dropdown">
+          <button class="menu-btn" id="btn-menu-insert" title="Insert Snippet or Directive">Insert ▾</button>
+          <div class="dropdown-menu" id="dropdown-insert">
+            <button class="dropdown-item" data-insert="section-portrait">📑 Section (Portrait A4)</button>
+            <button class="dropdown-item" data-insert="section-landscape">📑 Section (Landscape A4, 2-Col)</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-insert="figure">🖼️ Figure Directive (@figure)</button>
+            <button class="dropdown-item" data-insert="pagebreak">📄 Page Break (@pagebreak)</button>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item" data-insert="table">📊 Table Template</button>
+            <button class="dropdown-item" data-insert="equation">🧮 Math Equation ($$)</button>
+          </div>
+        </div>
+
+        <button class="menu-btn" id="btn-menu-layout" title="Show Layout Properties">Layout</button>
+        <button class="menu-btn" id="btn-menu-figures" title="Open Figures Gallery & Manager">Figures</button>
+        <button class="menu-btn" id="btn-menu-templates" title="Word Reference Templates">Templates</button>
+        <button class="menu-btn primary" id="btn-menu-publish" title="Publish to DOCX / PDF">Publish</button>
       </nav>
       <div class="toolbar-actions">
-        <button id="btn-save" class="btn-sm" title="Save Project (Ctrl+S)">💾 Save</button>
+        <button id="btn-save" class="btn-sm" title="Save Project to Disk (Ctrl+S)">💾 Save</button>
+        <button id="btn-download-mdoc" class="btn-sm" title="Download .mdoc Archive to Browser">📥 Download .mdoc</button>
+        <button id="btn-toggle-preview" class="btn-sm" title="Toggle Live HTML Preview">👁️ Preview</button>
         <button id="btn-build" class="btn-sm btn-accent" title="Compile DOCX">⚙️ Build</button>
       </div>
     </header>
@@ -36,7 +53,7 @@
     <!-- Main Workspace (Panels) -->
     <div id="workspace">
       
-      <!-- Area 2: Project Navigator -->
+      <!-- Panel 1: Project Navigator -->
       <aside id="panel-navigator" class="panel resizable-panel">
         <div class="panel-header">
           <span>Project Navigator</span>
@@ -54,7 +71,7 @@
               <span>📊 Figures</span>
               <button class="icon-btn" id="btn-upload-figure" title="Upload Figure (SVG/PNG)">+</button>
             </div>
-            <input type="file" id="input-upload-figure" accept=".svg,.png,.jpg,.jpeg" style="display: none;">
+            <input type="file" id="input-upload-figure" accept=".svg,.png,.jpg,.jpeg" multiple style="display: none;">
             <ul id="tree-figures" class="tree-list">
               <li class="empty-hint">No figures registered.</li>
             </ul>
@@ -71,7 +88,7 @@
       <!-- Panel Divider 1 -->
       <div class="resizer" id="resizer-nav"></div>
 
-      <!-- Area 3: Markup Editor (CodeMirror 6) -->
+      <!-- Panel 2: Markup Editor (CodeMirror 6) -->
       <main id="panel-editor" class="panel">
         <div class="panel-header">
           <div class="file-tabs" id="editor-tabs">
@@ -88,10 +105,35 @@
         </div>
       </main>
 
-      <!-- Panel Divider 2 -->
+      <!-- Panel Divider 2 (Preview Resizer) -->
+      <div class="resizer" id="resizer-preview"></div>
+
+      <!-- Panel 3: Document Preview (Side-by-Side Right Pane) -->
+      <section id="panel-preview" class="panel">
+        <div class="preview-header">
+          <span>Document Preview</span>
+          <div class="preview-controls">
+            <span class="preview-badge">HTML Preview</span>
+            <button class="btn-sm" id="btn-full-preview" title="Open Full-Screen Preview">⛶ Full Preview</button>
+            <button class="icon-btn" id="btn-close-preview" title="Close Preview Panel">✕</button>
+          </div>
+        </div>
+        <div class="preview-body" id="preview-frame-container">
+          <div class="page-sheet portrait" id="preview-sheet">
+            <div class="preview-page-header" id="preview-doc-header">ENG-DOC | Rev A</div>
+            <div class="preview-page-content" id="preview-html-content">
+              <h1>Document Preview</h1>
+              <p>Live preview will reflect compiled section layouts and content.</p>
+            </div>
+            <div class="preview-page-footer">Page 1</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Panel Divider 3 (Properties Resizer) -->
       <div class="resizer" id="resizer-prop"></div>
 
-      <!-- Area 4: Contextual Properties Panel -->
+      <!-- Panel 4: Contextual Properties Panel -->
       <aside id="panel-properties" class="panel resizable-panel">
         <div class="panel-header">
           <span>Properties</span>
@@ -125,33 +167,12 @@
 
           <div class="prop-section">
             <div class="prop-title">Active Element</div>
-            <div id="prop-active-desc" class="info-box">Select an element in the editor to inspect properties.</div>
+            <div id="prop-active-desc" class="info-box">Select an element or figure in the navigator to inspect details.</div>
           </div>
         </div>
       </aside>
 
     </div>
-
-    <!-- Area 5: Document Preview (Collapsible) -->
-    <section id="panel-preview" class="preview-panel">
-      <div class="preview-header">
-        <span>Document Preview (Generated Page Representation)</span>
-        <div class="preview-controls">
-          <span class="preview-badge">HTML Preview (Fast)</span>
-          <button class="btn-sm" id="btn-toggle-preview">Collapse</button>
-        </div>
-      </div>
-      <div class="preview-body" id="preview-frame-container">
-        <div class="page-sheet portrait">
-          <div class="preview-page-header" id="preview-doc-header">ENG-DOC | Rev A</div>
-          <div class="preview-page-content" id="preview-html-content">
-            <h1>Document Preview</h1>
-            <p>Live preview will reflect compiled section layouts and content.</p>
-          </div>
-          <div class="preview-page-footer">Page 1</div>
-        </div>
-      </div>
-    </section>
 
     <!-- Status Bar -->
     <footer id="app-statusbar">
@@ -162,7 +183,7 @@
       <div class="status-item flex-end" id="status-save-time">Last saved: Never</div>
     </footer>
 
-    <!-- New Project Dialog Modal (hidden by default) -->
+    <!-- New Project Dialog Modal -->
     <div id="modal-new-project" class="modal-overlay" style="display: none;">
       <div class="modal-dialog">
         <div class="modal-header">
@@ -170,10 +191,10 @@
           <button class="icon-btn" id="modal-close-btn">×</button>
         </div>
         <div class="modal-body">
-          <label>Project Name</label>
-          <input type="text" id="modal-proj-name" class="input-text" placeholder="e.g. Radar Receiver Subsystem">
-          <label>Document Number</label>
-          <input type="text" id="modal-proj-docnum" class="input-text" placeholder="e.g. ENG-RX-001">
+          <label>Project Title</label>
+          <input type="text" id="modal-proj-name" class="input-text" placeholder="e.g. Flight Telemetry Subsystem">
+          <label>Document ID</label>
+          <input type="text" id="modal-proj-id" class="input-text" placeholder="e.g. ENG-TEL-001">
           <label>Revision</label>
           <input type="text" id="modal-proj-rev" class="input-text" value="A">
         </div>
@@ -184,7 +205,102 @@
       </div>
     </div>
 
-    <!-- New File Dialog Modal (hidden by default) -->
+    <!-- Open Project Dialog Modal -->
+    <div id="modal-open-project" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <span>Open Engineering Project (.mdoc)</span>
+          <button class="icon-btn" id="modal-open-close-btn">×</button>
+        </div>
+        <div class="modal-body">
+          <label>Option 1: Choose File from Computer</label>
+          <button id="btn-browse-open-file" class="btn-sm btn-accent" style="width: 100%; padding: 8px;">📁 Select .mdoc from Computer</button>
+          
+          <div style="text-align: center; color: var(--text-muted); font-size: 11px; margin: 4px 0;">— OR —</div>
+
+          <label>Option 2: Open Server / Local Path</label>
+          <input type="text" id="modal-open-path-input" class="input-text" placeholder="e.g. examples/satellite_thermal_spec.mdoc">
+
+          <div style="text-align: center; color: var(--text-muted); font-size: 11px; margin: 4px 0;">— OR —</div>
+
+          <button id="btn-open-sample-shortcut" class="btn-sm" style="width: 100%;">🚀 Open Sample Satellite Thermal Spec</button>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-open-cancel-btn">Cancel</button>
+          <button id="modal-open-submit-btn" class="primary">Open from Path</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Figures Manager Modal -->
+    <div id="modal-figures-manager" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog modal-large">
+        <div class="modal-header">
+          <span>📊 Figure Manager & Asset Gallery</span>
+          <div style="display: flex; gap: 8px;">
+            <button id="btn-modal-upload-fig" class="btn-sm btn-accent">+ Upload New Figure (SVG/PNG)</button>
+            <button class="icon-btn" id="modal-figures-close-btn">×</button>
+          </div>
+        </div>
+        <div class="modal-body" style="flex: 1; overflow-y: auto;">
+          <div id="figures-gallery-container" class="figures-gallery-grid">
+            <!-- Populated dynamically with figure cards -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-figures-done-btn">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Templates Modal -->
+    <div id="modal-templates" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog modal-medium">
+        <div class="modal-header">
+          <span>📑 Word Reference Templates</span>
+          <button class="icon-btn" id="modal-templates-close-btn">×</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+            Reference Word templates define document typography, header/footer branding, table styling, and margins when compiling to Word (.docx) and PDF.
+          </p>
+          <label>Available Templates</label>
+          <ul id="list-templates" class="tree-list" style="background: var(--bg-surface); padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto;">
+            <li>Loading templates...</li>
+          </ul>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-templates-close-bottom-btn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Full Document Preview Modal -->
+    <div id="modal-full-preview" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog modal-large" style="width: 95vw; max-width: 1300px; height: 92vh;">
+        <div class="modal-header">
+          <span>⛶ Full Document Presentation Preview</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="btn-full-preview-refresh" class="btn-sm">🔄 Refresh</button>
+            <button class="icon-btn" id="modal-full-preview-close-btn">×</button>
+          </div>
+        </div>
+        <div class="modal-body" style="flex: 1; overflow: auto; background-color: #121315; padding: 24px; display: flex; justify-content: center;">
+          <div class="page-sheet portrait" id="full-preview-sheet" style="max-width: 850px; min-height: 1100px;">
+            <div class="preview-page-header" id="full-preview-header">ENG-DOC</div>
+            <div class="preview-page-content" id="full-preview-html-content">
+              <!-- Live preview content -->
+            </div>
+            <div class="preview-page-footer">End of Preview</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="modal-full-preview-close-bottom">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New File Dialog Modal -->
     <div id="modal-new-file" class="modal-overlay" style="display: none;">
       <div class="modal-dialog">
         <div class="modal-header">
@@ -202,7 +318,7 @@
       </div>
     </div>
 
-    <!-- Publish Dialog Modal (hidden by default) -->
+    <!-- Publish Dialog Modal -->
     <div id="modal-publish" class="modal-overlay" style="display: none;">
       <div class="modal-dialog">
         <div class="modal-header">

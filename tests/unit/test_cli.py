@@ -104,3 +104,4 @@ def test_cli_build_missing_file():
     args = parser.parse_args(["build", "non_existent.mdoc"])
     exit_code = cli_build(args)
     assert exit_code == 1
+

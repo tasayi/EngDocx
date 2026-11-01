@@ -10,6 +10,7 @@ from engdoc.compiler.html_preview import HTMLPreviewGenerator
 from engdoc.core.exceptions import EngDocError, ProjectArchiveError
 from engdoc.project.session import SessionManager
 from engdoc.publishing.service import PublishingService
+from engdoc.templates.manager import TemplateManager
 
 router = APIRouter(prefix="/compile", tags=["Compilation"])
 
@@ -28,6 +29,10 @@ class CompileDocxResponse(BaseModel):
     stats: dict[str, int] = Field(default_factory=dict)
     stdout: str = ""
     stderr: str = ""
+
+
+class TemplateListResponse(BaseModel):
+    templates: list[str]
 
 
 class PreviewRequest(BaseModel):
@@ -203,3 +208,17 @@ async def download_compiled_document(session_id: str, filename: str) -> FileResp
         media_type=media_type,
         filename=safe_name,
     )
+
+
+@router.get("/templates", response_model=TemplateListResponse)
+async def list_templates(session_id: str | None = None) -> TemplateListResponse:
+    """Lists available reference DOCX templates."""
+    workspace = None
+    if session_id:
+        try:
+            session = SessionManager.get_session(session_id)
+            workspace = session.workspace_dir
+        except Exception:
+            pass
+    tpls = TemplateManager.list_available_templates(workspace)
+    return TemplateListResponse(templates=tpls)

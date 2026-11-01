@@ -185,33 +185,41 @@
   font-size: 11px;
 }
 
-/* Document Preview Panel (Lower Split) */
-.preview-panel {
-  height: 240px;
-  min-height: 120px;
-  max-height: 500px;
+/* Document Preview Panel (Side-by-Side Right Pane) */
+#panel-preview {
+  width: 480px;
+  min-width: 320px;
+  max-width: 850px;
   background-color: var(--bg-dark);
-  border-top: 1px solid var(--border-color);
+  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  transition: width 0.15s ease;
+}
+
+#panel-preview.collapsed {
+  display: none !important;
 }
 
 .preview-header {
-  height: 28px;
-  background-color: var(--bg-darker);
+  height: 32px;
+  background-color: var(--bg-dark);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
   font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
   color: var(--text-secondary);
 }
 
 .preview-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .preview-badge {
@@ -220,11 +228,13 @@
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 10px;
+  text-transform: none;
 }
 
 .preview-body {
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
   display: flex;
   justify-content: center;
@@ -235,22 +245,47 @@
 .page-sheet {
   background: #ffffff;
   color: #111111;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
   border-radius: 2px;
-  padding: 30px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
+  width: 100%;
+  max-width: 650px;
 }
 
 .page-sheet.portrait {
-  width: 595px; /* Scaled A4 preview */
-  min-height: 842px;
+  width: 100%;
+  min-height: 800px;
 }
 
 .page-sheet.landscape {
-  width: 842px;
-  min-height: 595px;
+  width: 100%;
+  max-width: 800px;
+  min-height: 560px;
+}
+
+.preview-figure {
+  margin: 16px 0;
+  text-align: center;
+}
+
+.preview-figure img {
+  max-width: 100%;
+  max-height: 350px;
+  object-fit: contain;
+  display: inline-block;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+}
+
+.preview-figure figcaption {
+  font-size: 11px;
+  color: #475569;
+  margin-top: 6px;
+  font-style: italic;
 }
 
 .page-sheet.columns-2 .preview-page-content {

@@ -163,3 +163,42 @@ async def test_security_path_traversal_api(async_client: AsyncClient, tmp_path: 
         json={"path": "../escape.txt", "content": "evil"},
     )
     assert bad_write.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_upload_and_download_project_api(async_client: AsyncClient, tmp_path: Path):
+    # 1. Create a project
+    target_archive = str(tmp_path / "origin.mdoc")
+    create_res = await async_client.post(
+        "/api/projects/new",
+        json={
+            "project_name": "Upload Download Test",
+            "document_number": "ENG-UD-001",
+            "output_path": target_archive,
+        },
+    )
+    assert create_res.status_code == 201
+    session_id = create_res.json()["session_id"]
+
+    # 2. Download the project .mdoc archive
+    download_res = await async_client.get(f"/api/projects/{session_id}/download")
+    assert download_res.status_code == 200
+    assert "application/zip" in download_res.headers["content-type"]
+    assert len(download_res.content) > 0
+
+    # 3. Upload the downloaded bytes back via POST /api/projects/upload
+    import io
+    upload_res = await async_client.post(
+        "/api/projects/upload",
+        files={"file": ("reloaded.mdoc", io.BytesIO(download_res.content), "application/zip")},
+    )
+    assert upload_res.status_code == 200
+    upload_data = upload_res.json()
+    assert upload_data["manifest"]["project_name"] == "Upload Download Test"
+    new_session_id = upload_data["session_id"]
+
+    # 4. Verify tree of uploaded session
+    tree_res = await async_client.get(f"/api/projects/{new_session_id}/tree")
+    assert tree_res.status_code == 200
+    assert tree_res.json()["project_name"] == "Upload Download Test"
+

@@ -107,3 +107,14 @@ async def test_figure_lifecycle_and_docx_embedding(async_client: AsyncClient, tm
     with zipfile.ZipFile(v2_docx, "r") as zf:
         media_files_v2 = [f for f in zf.namelist() if f.startswith("word/media/")]
         assert len(media_files_v2) >= 1
+
+    # 8. Delete figure and verify removed from registry
+    del_res = await async_client.delete(f"/api/figures/{session_id}/FIG-001")
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+
+    # 9. Verify figure no longer in registry
+    list_after = await async_client.get(f"/api/figures/{session_id}")
+    assert list_after.status_code == 200
+    assert len(list_after.json()["figures"]) == 0
+

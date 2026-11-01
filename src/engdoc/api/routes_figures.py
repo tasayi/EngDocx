@@ -1,5 +1,7 @@
 """Figure Management API Routes."""
 
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -92,23 +94,76 @@ async def get_figure_preview(session_id: str, figure_id: str) -> FileResponse:
     registry = FigureRegistryManager.load_registry(session.workspace_dir)
     fig = registry.figures.get(figure_id)
     if not fig:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Figure [{figure_id}] not found.")
+        for k, v in registry.figures.items():
+            if k.lower() == figure_id.lower():
+                fig = v
+                break
+
+    if not fig:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Figure [{figure_id}] not found in registry.",
+        )
 
     source_path = session.workspace_dir / fig.source
     if not source_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Source file for [{figure_id}] not found.")
+        cand1 = session.workspace_dir / "figures" / Path(fig.source).name
+        cand2 = session.workspace_dir / "assets" / "figures" / Path(fig.source).name
+        if cand1.is_file():
+            source_path = cand1
+        elif cand2.is_file():
+            source_path = cand2
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Source file for [{figure_id}] not found at '{fig.source}'.",
+            )
 
-    media_type = "image/svg+xml" if source_path.suffix.lower() == ".svg" else "image/png"
-    return FileResponse(source_path, media_type=media_type)
+    ext = source_path.suffix.lower()
+    if ext == ".svg":
+        media_type = "image/svg+xml"
+    elif ext in (".jpg", ".jpeg"):
+        media_type = "image/jpeg"
+    elif ext == ".png":
+        media_type = "image/png"
+    elif ext == ".emf":
+        svg_cand = source_path.with_suffix(".svg")
+        png_cand = source_path.with_suffix(".png")
+        if svg_cand.is_file():
+            source_path = svg_cand
+            media_type = "image/svg+xml"
+        elif png_cand.is_file():
+            source_path = png_cand
+            media_type = "image/png"
+        else:
+            media_type = "application/x-msmetafile"
+    else:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        source_path,
+        media_type=media_type,
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @router.delete("/{session_id}/{figure_id}")
-async def delete_figure(session_id: str, figure_id: str) -> dict[str, str]:
+async def delete_figure(session_id: str, figure_id: str) -> dict[str, object]:
     """Unregisters a figure and removes its cache entry."""
     try:
         session = SessionManager.get_session(session_id)
     except ProjectArchiveError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    registry = FigureRegistryManager.load_registry(session.workspace_dir)
+    fig = registry.figures.get(figure_id)
+    if fig:
+        source_path = session.workspace_dir / fig.source
+        if source_path.is_file():
+            try:
+                source_path.unlink()
+            except Exception:
+                pass
 
     deleted = FigureRegistryManager.delete_figure(session.workspace_dir, figure_id)
     if not deleted:
@@ -116,4 +171,4 @@ async def delete_figure(session_id: str, figure_id: str) -> dict[str, str]:
 
     session.is_dirty = True
     session.dirty_files.add("metadata/figures.yaml")
-    return {"status": "deleted", "figure_id": figure_id}
+    return {"status": "deleted", "figure_id": figure_id, "success": True}

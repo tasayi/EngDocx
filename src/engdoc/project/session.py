@@ -89,24 +89,28 @@ class ProjectSession:
                         )
                     )
 
-        # 2. Figures (assets/figures/)
-        fig_dir = self.workspace_dir / "assets" / "figures"
-        if fig_dir.is_dir():
-            for root, _, files in os.walk(fig_dir):
-                for f in sorted(files):
-                    if f.startswith("."):
-                        continue
-                    f_path = Path(root) / f
-                    rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
-                    figures.append(
-                        TreeItem(
-                            name=f,
-                            path=rel,
-                            item_type="file",
-                            category="figure",
-                            size_bytes=f_path.stat().st_size,
+        # 2. Figures (figures/ and assets/figures/)
+        seen_fig_paths: set[str] = set()
+        for candidate_dir in [self.workspace_dir / "figures", self.workspace_dir / "assets" / "figures"]:
+            if candidate_dir.is_dir():
+                for root, _, files in os.walk(candidate_dir):
+                    for f in sorted(files):
+                        if f.startswith(".") or ".cache" in root:
+                            continue
+                        f_path = Path(root) / f
+                        rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
+                        if rel in seen_fig_paths:
+                            continue
+                        seen_fig_paths.add(rel)
+                        figures.append(
+                            TreeItem(
+                                name=f,
+                                path=rel,
+                                item_type="file",
+                                category="figure",
+                                size_bytes=f_path.stat().st_size,
+                            )
                         )
-                    )
 
         # 3. Templates (templates/)
         tpl_dir = self.workspace_dir / "templates"

@@ -95,3 +95,177 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+.modal-dialog.modal-large {
+  width: 90vw;
+  max-width: 1100px;
+  height: 85vh;
+  max-height: 850px;
+}
+
+.modal-dialog.modal-medium {
+  width: 650px;
+  max-width: 90vw;
+  max-height: 80vh;
+}
+
+/* Dropdown Menu */
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  min-width: 220px;
+  z-index: 1000;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+.dropdown-menu.show {
+  display: block;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+
+.dropdown-item:hover {
+  background: var(--bg-surface);
+  color: #fff;
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
+/* Figure Tree Item with actions */
+.tree-figure-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.tree-figure-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-figure-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0.6;
+}
+
+.tree-list li:hover .tree-figure-actions {
+  opacity: 1;
+}
+
+.btn-icon-subtle {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border-radius: 2px;
+}
+
+.btn-icon-subtle:hover {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.btn-icon-danger:hover {
+  background: rgba(241, 76, 76, 0.2);
+  color: var(--danger-color);
+}
+
+/* Figure Gallery Grid */
+.figures-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  overflow-y: auto;
+  max-height: 55vh;
+  padding: 4px;
+}
+
+.figure-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.figure-card-preview {
+  height: 150px;
+  background: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.figure-card-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.figure-card-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.figure-card-id {
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--accent-color);
+}
+
+.figure-card-caption {
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.figure-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+}
+

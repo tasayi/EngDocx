@@ -4,6 +4,9 @@
 
 import { loadContent, getContent, getActivePath, insertSnippet } from './editor.js';
 import { requestPreviewUpdate } from './preview.js';
+import { FigureManagerUI } from './figures.js';
+
+const figureManager = new FigureManagerUI();
 
 class ProjectState {
   constructor() {
@@ -16,7 +19,7 @@ class ProjectState {
     this.autoSaveTimer = null;
   }
 
-  setSession(sessionId, manifest, tree) {
+  async setSession(sessionId, manifest, tree) {
     this.sessionId = sessionId;
     this.manifest = manifest;
     this.tree = tree;
@@ -24,11 +27,12 @@ class ProjectState {
     this.openTabs.clear();
 
     this.updateStatus();
+    await figureManager.loadFigures(sessionId);
     this.renderTree();
 
     // Auto-open entry point
     if (manifest.entry_point) {
-      this.openDocument(manifest.entry_point);
+      await this.openDocument(manifest.entry_point);
     }
   }
 
@@ -40,7 +44,7 @@ class ProjectState {
     if (this.manifest) {
       projEl.textContent = `Project: ${this.manifest.project_name} (${this.manifest.document_number} Rev ${this.manifest.revision})`;
       if (previewHeader) {
-        previewHeader.textContent = `${this.manifest.document_number} | Rev ${this.manifest.revision}`;
+        previewHeader.textContent = `${this.manifest.document_number} | Rev ${this.manifest.revision} – ${this.manifest.project_name}`;
       }
     } else {
       projEl.textContent = 'Project: None';
@@ -60,77 +64,79 @@ class ProjectState {
 
     // 1. Documents
     const treeDocs = document.getElementById('tree-documents');
-    treeDocs.innerHTML = '';
-    if (this.tree.documents.length === 0) {
-      treeDocs.innerHTML = '<li class="empty-hint">No documents found.</li>';
-    } else {
-      this.tree.documents.forEach((doc) => {
-        const li = document.createElement('li');
-        li.dataset.path = doc.path;
-        li.innerHTML = `<span class="tree-icon">📝</span> ${doc.name}`;
-        if (this.activeTab === doc.path) li.classList.add('active');
-        li.addEventListener('click', () => this.openDocument(doc.path));
-        treeDocs.appendChild(li);
-      });
+    if (treeDocs) {
+      treeDocs.innerHTML = '';
+      if (!this.tree.documents || this.tree.documents.length === 0) {
+        treeDocs.innerHTML = '<li class="empty-hint">No documents found.</li>';
+      } else {
+        this.tree.documents.forEach((doc) => {
+          const li = document.createElement('li');
+          li.dataset.path = doc.path;
+          li.innerHTML = `<span class="tree-icon">📝</span> ${doc.name}`;
+          if (this.activeTab === doc.path) li.classList.add('active');
+          li.addEventListener('click', () => this.openDocument(doc.path));
+          treeDocs.appendChild(li);
+        });
+      }
     }
 
     // 2. Figures
     const treeFigs = document.getElementById('tree-figures');
-    treeFigs.innerHTML = '';
-    if (this.tree.figures.length === 0) {
-      treeFigs.innerHTML = '<li class="empty-hint">No figures registered.</li>';
-    } else {
-      this.tree.figures.forEach((fig) => {
-        const li = document.createElement('li');
-        li.dataset.path = fig.path;
-        li.innerHTML = `<span class="tree-icon">🖼️</span> ${fig.name}`;
-        li.addEventListener('click', () => {
-          const desc = document.getElementById('prop-active-desc');
-          if (desc) {
-            const figStem = fig.name.replace(/\.[^/.]+$/, '');
-            desc.innerHTML = `<strong>Figure:</strong> ${fig.name}<br><strong>Path:</strong> ${fig.path}<br><button class="btn-sm" id="btn-insert-active-fig" style="margin-top:8px;">Insert @figure</button>`;
-            document.getElementById('btn-insert-active-fig')?.addEventListener('click', () => {
-              insertSnippet(`\n@figure ${figStem}\n  width: 16cm\n  alignment: center\n  caption: ${figStem}\n@end\n`);
-            });
+    if (treeFigs) {
+      figureManager.renderNavigatorFigures(
+        treeFigs,
+        this.sessionId,
+        (fig) => {
+          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '150mm'}"\n@end\n`);
+        },
+        async (figId) => {
+          try {
+            await figureManager.deleteFigure(this.sessionId, figId);
+            await this.refreshTree();
+          } catch (err) {
+            alert(`Failed to delete figure: ${err.message}`);
           }
-        });
-        treeFigs.appendChild(li);
-      });
+        }
+      );
     }
 
     // 3. Templates
     const treeTpls = document.getElementById('tree-templates');
-    treeTpls.innerHTML = '';
-    if (this.tree.templates.length === 0) {
-      treeTpls.innerHTML = '<li class="empty-hint">No templates loaded.</li>';
-    } else {
-      this.tree.templates.forEach((tpl) => {
-        const li = document.createElement('li');
-        li.dataset.path = tpl.path;
-        li.innerHTML = `<span class="tree-icon">📘</span> ${tpl.name}`;
-        treeTpls.appendChild(li);
-      });
+    if (treeTpls) {
+      treeTpls.innerHTML = '';
+      if (!this.tree.templates || this.tree.templates.length === 0) {
+        treeTpls.innerHTML = '<li class="empty-hint">default_engineering.docx</li>';
+      } else {
+        this.tree.templates.forEach((tpl) => {
+          const li = document.createElement('li');
+          li.dataset.path = tpl.path;
+          li.innerHTML = `<span class="tree-icon">📘</span> ${tpl.name}`;
+          treeTpls.appendChild(li);
+        });
+      }
     }
   }
 
   async openDocument(path) {
     if (!this.sessionId) return;
 
-    // Check if already open in tabs
     if (!this.openTabs.has(path)) {
       try {
         const res = await fetch(`/api/projects/${this.sessionId}/file?path=${encodeURIComponent(path)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          throw new Error(`Failed to load ${path}`);
+        }
         const data = await res.json();
+        const docName = path.split('/').pop();
         this.openTabs.set(path, {
-          path,
-          name: path.split('/').pop(),
-          content: data.content,
+          path: path,
+          name: docName,
           isDirty: false,
+          content: data.content,
         });
       } catch (err) {
-        console.error(`Failed to load ${path}:`, err);
-        alert(`Failed to load document: ${err.message}`);
+        console.error(err);
+        alert(err.message);
         return;
       }
     }
@@ -138,59 +144,83 @@ class ProjectState {
     this.activeTab = path;
     const tabData = this.openTabs.get(path);
     loadContent(tabData.content, path);
-    requestPreviewUpdate(this.sessionId, tabData.content);
 
     this.renderTabs();
-    this.highlightTreeItem(path);
+    this.renderTree();
+    requestPreviewUpdate(this.sessionId, tabData.content);
   }
 
   renderTabs() {
     const tabsContainer = document.getElementById('editor-tabs');
+    if (!tabsContainer) return;
     tabsContainer.innerHTML = '';
 
     this.openTabs.forEach((tab, path) => {
       const tabEl = document.createElement('div');
-      tabEl.className = `tab ${this.activeTab === path ? 'active' : ''}`;
-      tabEl.dataset.path = path;
-      const dirtyDot = tab.isDirty ? ' •' : '';
-      tabEl.innerHTML = `<span>${tab.name}${dirtyDot}</span><span class="tab-close" title="Close Tab">×</span>`;
+      tabEl.className = 'tab';
+      if (path === this.activeTab) {
+        tabEl.classList.add('active');
+      }
 
-      tabEl.querySelector('span:first-child').addEventListener('click', () => {
-        this.openDocument(path);
-      });
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'tab-title';
+      titleSpan.textContent = tab.name + (tab.isDirty ? ' •' : '');
+      tabEl.appendChild(titleSpan);
 
-      tabEl.querySelector('.tab-close').addEventListener('click', (e) => {
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'tab-close';
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.closeTab(path);
+      });
+      tabEl.appendChild(closeBtn);
+
+      tabEl.addEventListener('click', () => {
+        this.openDocument(path);
       });
 
       tabsContainer.appendChild(tabEl);
     });
   }
 
-  highlightTreeItem(path) {
-    document.querySelectorAll('#tree-documents li').forEach((li) => {
-      li.classList.toggle('active', li.dataset.path === path);
-    });
+  closeTab(path) {
+    const tab = this.openTabs.get(path);
+    if (!tab) return;
+
+    if (tab.isDirty) {
+      if (!confirm(`Save changes to ${tab.name} before closing?`)) {
+        this.openTabs.delete(path);
+      } else {
+        this.saveCurrentDocument().then(() => {
+          this.openTabs.delete(path);
+          this._finalizeTabClose(path);
+        });
+        return;
+      }
+    } else {
+      this.openTabs.delete(path);
+    }
+
+    this._finalizeTabClose(path);
   }
 
-  closeTab(path) {
-    this.openTabs.delete(path);
+  _finalizeTabClose(path) {
     if (this.activeTab === path) {
-      const remaining = Array.from(this.openTabs.keys());
-      if (remaining.length > 0) {
-        this.openDocument(remaining[0]);
+      const keys = Array.from(this.openTabs.keys());
+      if (keys.length > 0) {
+        this.openDocument(keys[keys.length - 1]);
       } else {
         this.activeTab = null;
         loadContent('', '');
       }
     }
     this.renderTabs();
+    this.renderTree();
   }
 
-  onDocumentEdited(newContent, path) {
+  onContentChange(newContent, path) {
     if (!path || !this.openTabs.has(path)) return;
-
     const tab = this.openTabs.get(path);
     if (tab.content !== newContent) {
       tab.content = newContent;
@@ -198,74 +228,91 @@ class ProjectState {
       this.isProjectDirty = true;
       this.renderTabs();
       this.updateStatus();
+
       requestPreviewUpdate(this.sessionId, newContent);
 
-      // Debounce auto-save to session workspace
-      this.scheduleAutoSave();
+      if (this.autoSaveTimer) clearTimeout(this.autoSaveTimer);
+      this.autoSaveTimer = setTimeout(() => {
+        this.saveCurrentDocument();
+      }, 2500);
     }
   }
 
-  scheduleAutoSave() {
-    if (this.autoSaveTimer) clearTimeout(this.autoSaveTimer);
-    this.autoSaveTimer = setTimeout(() => {
-      this.saveActiveFile();
-    }, 2500); // 2.5s auto-save to working session
-  }
-
-  async saveActiveFile() {
+  async saveCurrentDocument() {
     if (!this.sessionId || !this.activeTab) return;
     const tab = this.openTabs.get(this.activeTab);
-    if (!tab) return;
+    if (!tab || !tab.isDirty) return;
 
-    const currentContent = getContent();
     try {
       const res = await fetch(`/api/projects/${this.sessionId}/file`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: this.activeTab, content: currentContent }),
+        body: JSON.stringify({
+          path: tab.path,
+          content: getContent(),
+        }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      tab.content = currentContent;
+
+      if (!res.ok) {
+        throw new Error(`Failed to save ${tab.path}`);
+      }
+
       tab.isDirty = false;
+      const anyDirty = Array.from(this.openTabs.values()).some((t) => t.isDirty);
+      this.isProjectDirty = anyDirty;
+
       this.renderTabs();
+      this.updateStatus();
     } catch (err) {
-      console.error('Auto-save failed:', err);
+      console.error('Save failed:', err);
     }
   }
 
   async saveProjectArchive() {
     if (!this.sessionId) return;
-    await this.saveActiveFile();
+    await this.saveCurrentDocument();
 
     try {
       const res = await fetch(`/api/projects/${this.sessionId}/save`, {
         method: 'POST',
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       this.isProjectDirty = false;
-      this.openTabs.forEach((tab) => (tab.isDirty = false));
-      this.renderTabs();
       this.updateStatus();
 
-      const timeStr = new Date().toLocaleTimeString();
-      document.getElementById('status-save-time').textContent = `Last saved: ${timeStr}`;
-      console.log('Project saved atomically:', data.archive_path);
+      const saveTimeEl = document.getElementById('status-save-time');
+      if (saveTimeEl) {
+        saveTimeEl.textContent = `Saved: ${new Date().toLocaleTimeString()}`;
+      }
+
+      const statusText = document.getElementById('status-text');
+      if (statusText) {
+        statusText.textContent = `Project saved to: ${data.archive_path}`;
+        setTimeout(() => {
+          if (statusText.textContent.startsWith('Project saved')) {
+            statusText.textContent = 'Ready';
+          }
+        }, 5000);
+      }
+      alert(`Project successfully saved to disk:\n${data.archive_path}`);
     } catch (err) {
-      console.error('Save failed:', err);
-      alert(`Save project failed: ${err.message}`);
+      console.error('Project archive save failed:', err);
+      alert(`Save failed: ${err.message}`);
     }
   }
 
-  async createNewFile(relPath) {
+  async createNewFile(path) {
     if (!this.sessionId) return;
     try {
       const res = await fetch(`/api/projects/${this.sessionId}/file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: relPath,
-          content: `# ${relPath.split('/').pop().replace('.md', '')}\n\n`,
+          path: path,
+          content: `# ${path.split('/').pop().replace('.md', '')}\n\nStart writing here.\n`,
         }),
       });
       if (!res.ok) {
@@ -273,73 +320,31 @@ class ProjectState {
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       await this.refreshTree();
-      await this.openDocument(relPath);
+      await this.openDocument(path);
     } catch (err) {
-      console.error('Create file error:', err);
       alert(`Failed to create file: ${err.message}`);
     }
   }
 
   async refreshTree() {
     if (!this.sessionId) return;
-    const res = await fetch(`/api/projects/${this.sessionId}/tree`);
-    if (res.ok) {
-      this.tree = await res.json();
-      this.renderTree();
-    }
-  }
-
-  async compileProjectDocx() {
-    if (!this.sessionId) {
-      alert('Please create or open a project before building.');
-      return;
-    }
-    await this.saveActiveFile();
-
-    const statusText = document.getElementById('status-text');
-    if (statusText) statusText.textContent = '⚙️ Compiling DOCX...';
-
     try {
-      const res = await fetch('/api/compile/docx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: this.sessionId }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
+      const res = await fetch(`/api/projects/${this.sessionId}/tree`);
+      if (res.ok) {
+        this.tree = await res.json();
+        await figureManager.loadFigures(this.sessionId);
+        this.renderTree();
       }
-      const data = await res.json();
-      if (statusText) {
-        statusText.textContent = `Built: ${data.filename} (${data.duration_seconds}s)`;
-      }
-
-      // Trigger download
-      const a = document.createElement('a');
-      a.href = data.download_url;
-      a.download = data.filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-
-      console.log('DOCX Compilation Success:', data);
     } catch (err) {
-      console.error('Compilation failed:', err);
-      alert(`Build failed: ${err.message}`);
-      if (statusText) statusText.textContent = 'Build Failed';
+      console.warn('Failed to refresh tree:', err);
     }
   }
 }
 
 export const projectState = new ProjectState();
 
-export function initProjectNavigator() {
-  // Build Project Trigger
-  const btnBuild = document.getElementById('btn-build');
-  btnBuild?.addEventListener('click', () => {
-    projectState.compileProjectDocx();
-  });
-  // New Project Modal triggers
+export function initProjectManager() {
+  // New Project Dialog
   const btnNewProj = document.getElementById('btn-new-proj');
   const modalNewProj = document.getElementById('modal-new-project');
   const modalCloseBtn = document.getElementById('modal-close-btn');
@@ -352,17 +357,17 @@ export function initProjectNavigator() {
       document.getElementById('modal-proj-name').focus();
     });
 
-    const closeModal = () => (modalNewProj.style.display = 'none');
-    modalCloseBtn?.addEventListener('click', closeModal);
-    modalCancelBtn?.addEventListener('click', closeModal);
+    const closeNewModal = () => (modalNewProj.style.display = 'none');
+    modalCloseBtn?.addEventListener('click', closeNewModal);
+    modalCancelBtn?.addEventListener('click', closeNewModal);
 
     modalSubmitBtn?.addEventListener('click', async () => {
       const name = document.getElementById('modal-proj-name').value.trim();
-      const docNum = document.getElementById('modal-proj-docnum').value.trim();
+      const docNum = document.getElementById('modal-proj-id').value.trim();
       const rev = document.getElementById('modal-proj-rev').value.trim() || 'A';
 
       if (!name || !docNum) {
-        alert('Please specify both Project Name and Document Number.');
+        alert('Please fill in Project Title and Document ID.');
         return;
       }
 
@@ -377,24 +382,75 @@ export function initProjectNavigator() {
           throw new Error(errData.detail || `HTTP ${res.status}`);
         }
         const created = await res.json();
-        closeModal();
+        closeNewModal();
 
-        // Fetch tree for newly created session
         const treeRes = await fetch(`/api/projects/${created.session_id}/tree`);
         const tree = await treeRes.json();
-        projectState.setSession(created.session_id, created.manifest, tree);
+        await projectState.setSession(created.session_id, created.manifest, tree);
       } catch (err) {
         alert(`Failed to create project: ${err.message}`);
       }
     });
   }
 
-  // Open Project Trigger
+  // Open Project Dialog (File Picker + Server Path + Sample)
   const btnOpenProj = document.getElementById('btn-open-proj');
-  if (btnOpenProj) {
-    btnOpenProj.addEventListener('click', async () => {
-      const path = prompt('Enter path to .mdoc project archive:');
-      if (!path) return;
+  const modalOpenProj = document.getElementById('modal-open-project');
+  const modalOpenClose = document.getElementById('modal-open-close-btn');
+  const modalOpenCancel = document.getElementById('modal-open-cancel-btn');
+  const modalOpenSubmit = document.getElementById('modal-open-submit-btn');
+  const btnBrowseOpenFile = document.getElementById('btn-browse-open-file');
+  const inputOpenFile = document.getElementById('input-open-file');
+  const btnOpenSample = document.getElementById('btn-open-sample-shortcut');
+
+  if (btnOpenProj && modalOpenProj) {
+    btnOpenProj.addEventListener('click', () => {
+      modalOpenProj.style.display = 'flex';
+    });
+
+    const closeOpenModal = () => (modalOpenProj.style.display = 'none');
+    modalOpenClose?.addEventListener('click', closeOpenModal);
+    modalOpenCancel?.addEventListener('click', closeOpenModal);
+
+    // Option 1: Native file input
+    btnBrowseOpenFile?.addEventListener('click', () => {
+      inputOpenFile?.click();
+    });
+
+    inputOpenFile?.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/api/projects/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || `HTTP ${res.status}`);
+        }
+        const opened = await res.json();
+        closeOpenModal();
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+      } catch (err) {
+        alert(`Failed to open uploaded project: ${err.message}`);
+      } finally {
+        inputOpenFile.value = '';
+      }
+    });
+
+    // Option 2: Path input
+    modalOpenSubmit?.addEventListener('click', async () => {
+      const path = document.getElementById('modal-open-path-input')?.value.trim();
+      if (!path) {
+        alert('Please specify a project path.');
+        return;
+      }
+
       try {
         const res = await fetch('/api/projects/open', {
           method: 'POST',
@@ -406,11 +462,186 @@ export function initProjectNavigator() {
           throw new Error(errData.detail || `HTTP ${res.status}`);
         }
         const opened = await res.json();
-        projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+        closeOpenModal();
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
       } catch (err) {
         alert(`Failed to open project: ${err.message}`);
       }
     });
+
+    // Option 3: Sample Project Shortcut
+    btnOpenSample?.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/projects/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archive_path: 'examples/satellite_thermal_spec.mdoc' }),
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || `HTTP ${res.status}`);
+        }
+        const opened = await res.json();
+        closeOpenModal();
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+      } catch (err) {
+        alert(`Failed to open sample: ${err.message}`);
+      }
+    });
+  }
+
+  // Insert Menu Dropdown
+  const btnMenuInsert = document.getElementById('btn-menu-insert');
+  const dropdownInsert = document.getElementById('dropdown-insert');
+
+  if (btnMenuInsert && dropdownInsert) {
+    btnMenuInsert.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdownInsert.classList.toggle('show');
+    });
+
+    window.addEventListener('click', () => {
+      dropdownInsert.classList.remove('show');
+    });
+
+    dropdownInsert.querySelectorAll('[data-insert]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const type = btn.dataset.insert;
+        dropdownInsert.classList.remove('show');
+        if (type === 'section-portrait') {
+          insertSnippet('\n@section\n  orientation: portrait\n  page: A4\n  columns: 1\n@end\n');
+        } else if (type === 'section-landscape') {
+          insertSnippet('\n@section\n  orientation: landscape\n  page: A4\n  columns: 2\n@end\n');
+        } else if (type === 'figure') {
+          insertSnippet('\n@figure FIG-001\n  caption: "Figure caption"\n  width: "150mm"\n@end\n');
+        } else if (type === 'pagebreak') {
+          insertSnippet('\n@pagebreak\n');
+        } else if (type === 'table') {
+          insertSnippet('\n| Item | Description | Nominal | Tolerance |\n|---|---|---|---|\n| 1 | Signal Channel | 12.0 V | ±0.5 V |\n');
+        } else if (type === 'equation') {
+          insertSnippet('\n$$\nq_{\\text{rad}} = \\epsilon \\sigma \\left( T_1^4 - T_2^4 \\right)\n$$\n');
+        }
+      });
+    });
+  }
+
+  // Layout Menu Trigger
+  const btnMenuLayout = document.getElementById('btn-menu-layout');
+  btnMenuLayout?.addEventListener('click', () => {
+    const propPanel = document.getElementById('panel-properties');
+    if (propPanel) {
+      propPanel.scrollIntoView({ behavior: 'smooth' });
+      document.getElementById('prop-page-size')?.focus();
+    }
+  });
+
+  // Figures Menu Trigger & Modal
+  const btnMenuFigures = document.getElementById('btn-menu-figures');
+  const modalFigures = document.getElementById('modal-figures-manager');
+  const modalFigClose = document.getElementById('modal-figures-close-btn');
+  const modalFigDone = document.getElementById('modal-figures-done-btn');
+  const btnModalUploadFig = document.getElementById('btn-modal-upload-fig');
+  const inputUploadFig = document.getElementById('input-upload-figure');
+
+  const openFiguresGallery = async () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    if (modalFigures) {
+      modalFigures.style.display = 'flex';
+      const container = document.getElementById('figures-gallery-container');
+      await figureManager.loadFigures(projectState.sessionId);
+      figureManager.renderGallery(
+        container,
+        projectState.sessionId,
+        (fig) => {
+          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '150mm'}"\n@end\n`);
+          modalFigures.style.display = 'none';
+        },
+        async (figId) => {
+          try {
+            await figureManager.deleteFigure(projectState.sessionId, figId);
+            await projectState.refreshTree();
+            await figureManager.renderGallery(
+              container,
+              projectState.sessionId,
+              null,
+              null
+            );
+          } catch (err) {
+            alert(`Delete failed: ${err.message}`);
+          }
+        }
+      );
+    }
+  };
+
+  btnMenuFigures?.addEventListener('click', openFiguresGallery);
+  modalFigClose?.addEventListener('click', () => (modalFigures.style.display = 'none'));
+  modalFigDone?.addEventListener('click', () => (modalFigures.style.display = 'none'));
+  btnModalUploadFig?.addEventListener('click', () => inputUploadFig?.click());
+
+  // Figure Upload Handler (Navigator & Gallery)
+  const btnUploadFig = document.getElementById('btn-upload-figure');
+  btnUploadFig?.addEventListener('click', () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    inputUploadFig?.click();
+  });
+
+  inputUploadFig?.addEventListener('change', async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !projectState.sessionId) return;
+
+    try {
+      await figureManager.uploadFiles(projectState.sessionId, files);
+      await projectState.refreshTree();
+      const container = document.getElementById('figures-gallery-container');
+      if (modalFigures && modalFigures.style.display !== 'none' && container) {
+        figureManager.renderGallery(container, projectState.sessionId);
+      }
+      alert(`${files.length} figure(s) uploaded and registered successfully.`);
+    } catch (err) {
+      console.error('Figure upload failed:', err);
+      alert(`Upload failed: ${err.message}`);
+    } finally {
+      inputUploadFig.value = '';
+    }
+  });
+
+  // Templates Menu Trigger & Modal
+  const btnMenuTemplates = document.getElementById('btn-menu-templates');
+  const modalTemplates = document.getElementById('modal-templates');
+  const modalTplClose = document.getElementById('modal-templates-close-btn');
+  const modalTplBottomClose = document.getElementById('modal-templates-close-bottom-btn');
+
+  if (btnMenuTemplates && modalTemplates) {
+    btnMenuTemplates.addEventListener('click', async () => {
+      modalTemplates.style.display = 'flex';
+      const listEl = document.getElementById('list-templates');
+      if (listEl) {
+        listEl.innerHTML = '<li>Loading templates...</li>';
+        try {
+          const sessParam = projectState.sessionId ? `?session_id=${projectState.sessionId}` : '';
+          const res = await fetch(`/api/compile/templates${sessParam}`);
+          const data = await res.json();
+          listEl.innerHTML = '';
+          data.templates.forEach((t) => {
+            const li = document.createElement('li');
+            li.innerHTML = `📘 <strong>${t}</strong> <span style="font-size: 10px; color: var(--success-color);">(Available)</span>`;
+            listEl.appendChild(li);
+          });
+        } catch (err) {
+          listEl.innerHTML = `<li>default_engineering.docx</li>`;
+        }
+      }
+    });
+
+    modalTplClose?.addEventListener('click', () => (modalTemplates.style.display = 'none'));
+    modalTplBottomClose?.addEventListener('click', () => (modalTemplates.style.display = 'none'));
   }
 
   // Save Project Trigger (Button & Ctrl+S)
@@ -424,6 +655,17 @@ export function initProjectNavigator() {
       e.preventDefault();
       projectState.saveProjectArchive();
     }
+  });
+
+  // Download .mdoc Trigger (One-click direct browser download)
+  const btnDownloadMdoc = document.getElementById('btn-download-mdoc');
+  btnDownloadMdoc?.addEventListener('click', async () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    await projectState.saveCurrentDocument();
+    window.location.href = `/api/projects/${projectState.sessionId}/download`;
   });
 
   // New File Modal
@@ -461,47 +703,8 @@ export function initProjectNavigator() {
     });
   }
 
-  // Figure Upload
-  const btnUploadFig = document.getElementById('btn-upload-figure');
-  const inputUploadFig = document.getElementById('input-upload-figure');
-  btnUploadFig?.addEventListener('click', () => {
-    if (!projectState.sessionId) {
-      alert('Please create or open a project first.');
-      return;
-    }
-    inputUploadFig?.click();
-  });
-
-  inputUploadFig?.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file || !projectState.sessionId) return;
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('caption', file.name.replace(/\.[^/.]+$/, ''));
-
-    try {
-      const res = await fetch(`/api/figures/${projectState.sessionId}/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-      const fig = await res.json();
-      await projectState.refreshTree();
-      alert(`Figure ${fig.id} (${file.name}) uploaded and registered successfully.`);
-    } catch (err) {
-      console.error('Figure upload failed:', err);
-      alert(`Upload failed: ${err.message}`);
-    } finally {
-      inputUploadFig.value = '';
-    }
-  });
-
   // Publish Modal
-  const btnPublishMenu = document.querySelector('[data-action="publish"]');
+  const btnPublishMenu = document.getElementById('btn-menu-publish');
   const modalPublish = document.getElementById('modal-publish');
   const modalPubClose = document.getElementById('modal-pub-close-btn');
   const modalPubCancel = document.getElementById('modal-pub-cancel-btn');

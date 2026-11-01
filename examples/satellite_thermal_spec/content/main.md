@@ -94,3 +94,4 @@ $$
 # 5. Verification & Acceptance Criteria
 
 Thermal balance chamber testing shall demonstrate that all flight temperatures remain within designated operational limits under both hot-case solar maximum and cold-case eclipse minimum conditions with a minimum margin of $\pm 5^\circ\text{C}$.
+
