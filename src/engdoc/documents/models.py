@@ -60,6 +60,10 @@ class SectionGeometryInfo(BaseModel):
         description="Margins in mm: top, bottom, left, right, header, footer, gutter",
     )
     columns: int = Field(default=1, description="Number of text columns in this section")
+    start_type: str = Field(
+        default="nextPage",
+        description="Section break start type: continuous, nextPage, evenPage, oddPage",
+    )
     different_first_page_header_footer: bool = Field(
         default=False,
         description="Whether this section has a distinct first-page header/footer",

@@ -321,16 +321,23 @@ class DocxPostprocessor:
             if MARKER_PREFIX in p_text:
                 # Extract JSON payload
                 idx = p_text.find(MARKER_PREFIX)
-                json_str = p_text[idx + len(MARKER_PREFIX) :].strip()
+                json_str = (
+                    p_text[idx + len(MARKER_PREFIX) :]
+                    .strip()
+                    .replace("“", '"')
+                    .replace("”", '"')
+                )
                 try:
                     params = json.loads(json_str)
                 except Exception:
                     params = {}
 
-                next_layout = SectionLayout.from_params(params)
+                next_layout = SectionLayout.from_params(params, previous_layout=current_layout)
                 marker_paragraphs.append((p, next_layout))
+                current_layout = next_layout
 
         # Apply intermediate section breaks
+        current_layout = initial_layout
         for p, next_layout in marker_paragraphs:
             # The current_layout governs the section ending at this marker!
             pPr = p.find(f"{{{W_NS}}}pPr")
@@ -342,8 +349,8 @@ class DocxPostprocessor:
             if sect_pr is None:
                 sect_pr = etree.SubElement(pPr, f"{{{W_NS}}}sectPr")
 
-            # Apply geometry of the preceding section
-            current_layout.apply_to_sect_pr(sect_pr, section_type="nextPage")
+            # Apply geometry of the preceding section with transition break_type of next_layout
+            current_layout.apply_to_sect_pr(sect_pr, section_type=next_layout.break_type)
 
             # Clone header/footer references if not present
             for ref in header_footer_refs:
@@ -363,6 +370,6 @@ class DocxPostprocessor:
         if terminal_sect_pr is None:
             terminal_sect_pr = etree.SubElement(body, f"{{{W_NS}}}sectPr")
 
-        current_layout.apply_to_sect_pr(terminal_sect_pr, section_type="nextPage")
+        current_layout.apply_to_sect_pr(terminal_sect_pr, section_type=current_layout.break_type)
 
         return etree.tostring(root, xml_declaration=True, encoding="utf-8")

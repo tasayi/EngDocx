@@ -53,3 +53,33 @@ async def test_generate_html_preview_rewrites_images():
     payload = await HTMLPreviewGenerator.generate_preview(doc, session_id="test-session-123")
     assert "/api/projects/test-session-123/assets/figures/antenna_pattern.svg" in payload.html
 
+
+@pytest.mark.asyncio
+async def test_generate_html_preview_continuous_section():
+    doc = """# Main Title
+
+Introductory paragraph.
+
+@section
+  type: continuous
+  columns: 2
+@end
+
+Column 1 content here.
+
+Column 2 content here.
+
+@section
+  type: continuous
+  columns: 1
+@end
+
+Concluding paragraph.
+"""
+    payload = await HTMLPreviewGenerator.generate_preview(doc)
+    assert "preview-continuous-section columns-2" in payload.html
+    assert "preview-continuous-section columns-1" in payload.html
+    assert "Continuous Section Break (2 Col)" in payload.html
+    assert "Continuous Section Break (1 Col)" in payload.html
+
+

@@ -31,7 +31,7 @@ export function initEditor({ onDocChange } = {}) {
 
   if (btnSection) {
     btnSection.addEventListener('click', () => {
-      insertSnippet('\n@section\n  orientation: landscape\n  page: A4\n  columns: 1\n@end\n');
+      openSectionBuilderDialog();
     });
   }
 
@@ -48,6 +48,80 @@ export function initEditor({ onDocChange } = {}) {
   }
 
   return editorInstance;
+}
+
+export function openSectionBuilderDialog() {
+  const modal = document.getElementById('modal-section-builder');
+  if (!modal) return;
+  modal.style.display = 'flex';
+
+  const previewEl = document.getElementById('sec-builder-code-preview');
+  const typeRadios = document.querySelectorAll('input[name="sec-builder-type"]');
+  const colsSelect = document.getElementById('sec-builder-columns');
+  const orientSelect = document.getElementById('sec-builder-orient');
+  const pageSelect = document.getElementById('sec-builder-page');
+  const marginsSelect = document.getElementById('sec-builder-margins');
+
+  const updatePreview = () => {
+    const selectedType =
+      document.querySelector('input[name="sec-builder-type"]:checked')?.value || 'continuous';
+    const cols = colsSelect?.value || '1';
+    const orient = orientSelect?.value || 'portrait';
+    const page = pageSelect?.value || 'A4';
+    const margins = marginsSelect?.value || 'normal';
+
+    const lines = ['@section'];
+    lines.push(`  type: ${selectedType}`);
+    if (cols !== '1') lines.push(`  columns: ${cols}`);
+    if (orient !== 'portrait') lines.push(`  orientation: ${orient}`);
+    if (page !== 'A4') lines.push(`  page: ${page}`);
+    if (margins === 'narrow') {
+      lines.push('  margin: 0.5in');
+    } else if (margins === 'moderate') {
+      lines.push('  margin_top: 1.0in');
+      lines.push('  margin_bottom: 1.0in');
+      lines.push('  margin_left: 0.75in');
+      lines.push('  margin_right: 0.75in');
+    }
+    lines.push('@end');
+    const snippet = lines.join('\n');
+    if (previewEl) previewEl.textContent = snippet;
+    return snippet;
+  };
+
+  const closeDialog = () => {
+    modal.style.display = 'none';
+  };
+
+  if (!modal.dataset.initialized) {
+    modal.dataset.initialized = 'true';
+
+    typeRadios.forEach((r) => r.addEventListener('change', updatePreview));
+    colsSelect?.addEventListener('change', updatePreview);
+    orientSelect?.addEventListener('change', () => {
+      if (orientSelect.value === 'landscape') {
+        const nextRadio = document.querySelector('input[name="sec-builder-type"][value="next_page"]');
+        if (nextRadio) nextRadio.checked = true;
+      }
+      updatePreview();
+    });
+    pageSelect?.addEventListener('change', updatePreview);
+    marginsSelect?.addEventListener('change', updatePreview);
+
+    document.getElementById('modal-sec-builder-close')?.addEventListener('click', closeDialog);
+    document.getElementById('modal-sec-builder-cancel')?.addEventListener('click', closeDialog);
+    document.getElementById('modal-sec-builder-insert')?.addEventListener('click', () => {
+      const snippet = updatePreview();
+      insertSnippet(`\n${snippet}\n`);
+      closeDialog();
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeDialog();
+    });
+  }
+
+  updatePreview();
 }
 
 export function loadContent(text, path) {

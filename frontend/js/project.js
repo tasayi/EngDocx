@@ -2,7 +2,7 @@
  * EngDoc Project Navigator & State Management
  */
 
-import { loadContent, getContent, getActivePath, insertSnippet } from './editor.js';
+import { loadContent, getContent, getActivePath, insertSnippet, openSectionBuilderDialog } from './editor.js';
 import { requestPreviewUpdate } from './preview.js';
 import { FigureManagerUI } from './figures.js';
 import { openDocumentPatchDialog } from './patch.js';
@@ -862,14 +862,24 @@ export function initProjectManager() {
   // 4. Insert Menu Snippets
   const dropdownInsert = document.getElementById('dropdown-insert');
   if (dropdownInsert) {
+    const btnMenuInsertSection = document.getElementById('menu-insert-section-dialog');
+    btnMenuInsertSection?.addEventListener('click', () => {
+      dropdownInsert.classList.remove('show');
+      openSectionBuilderDialog();
+    });
+
     dropdownInsert.querySelectorAll('[data-insert]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const type = btn.dataset.insert;
         dropdownInsert.classList.remove('show');
-        if (type === 'section-portrait') {
-          insertSnippet('\n@section\n  orientation: portrait\n  page: A4\n  columns: 1\n@end\n');
+        if (type === 'section-continuous-2col') {
+          insertSnippet('\n@section\n  type: continuous\n  columns: 2\n@end\n');
+        } else if (type === 'section-continuous-1col') {
+          insertSnippet('\n@section\n  type: continuous\n  columns: 1\n@end\n');
+        } else if (type === 'section-portrait') {
+          insertSnippet('\n@section\n  type: next_page\n  orientation: portrait\n  page: A4\n  columns: 1\n@end\n');
         } else if (type === 'section-landscape') {
-          insertSnippet('\n@section\n  orientation: landscape\n  page: A4\n  columns: 2\n@end\n');
+          insertSnippet('\n@section\n  type: next_page\n  orientation: landscape\n  page: A4\n  columns: 2\n@end\n');
         } else if (type === 'figure') {
           insertSnippet('\n@figure FIG-001\n  caption: "Figure caption"\n  width: "150mm"\n@end\n');
         } else if (type === 'pagebreak') {

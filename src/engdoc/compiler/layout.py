@@ -79,9 +79,12 @@ class SectionLayout:
     margin_footer_dxa: int = 720
     custom_width_dxa: int | None = None
     custom_height_dxa: int | None = None
+    break_type: str = "continuous"  # continuous, nextPage, evenPage, oddPage
 
     @classmethod
-    def from_params(cls, params: dict) -> "SectionLayout":
+    def from_params(
+        cls, params: dict, previous_layout: "SectionLayout | None" = None
+    ) -> "SectionLayout":
         """Instantiates SectionLayout from a dictionary of directive parameters."""
         orient_raw = str(params.get("orientation", "portrait")).strip().lower()
         orientation: Literal["portrait", "landscape"] = (
@@ -103,6 +106,28 @@ class SectionLayout:
         left = parse_dimension_to_dxa(params.get("margin_left", params.get("margin", 1440)))
         right = parse_dimension_to_dxa(params.get("margin_right", params.get("margin", 1440)))
 
+        # Determine break type (MS Word: continuous, nextPage, evenPage, oddPage)
+        raw_type = str(params.get("type", params.get("break", ""))).strip().lower()
+        if "cont" in raw_type or "same" in raw_type:
+            break_type = "continuous"
+        elif "next" in raw_type or "new_page" in raw_type or "newpage" in raw_type:
+            break_type = "nextPage"
+        elif "even" in raw_type:
+            break_type = "evenPage"
+        elif "odd" in raw_type:
+            break_type = "oddPage"
+        elif previous_layout is not None and (
+            orientation != previous_layout.orientation or page != previous_layout.page
+        ):
+            # Physical sheet dimensions/orientation change requires nextPage
+            break_type = "nextPage"
+        elif "orientation" in params and "land" in orient_raw:
+            # Explicit landscape orientation without explicit type defaults to nextPage
+            break_type = "nextPage"
+        else:
+            # Same sheet layout change (columns, margins) defaults to continuous!
+            break_type = "continuous"
+
         return cls(
             orientation=orientation,
             page=page,
@@ -111,6 +136,7 @@ class SectionLayout:
             margin_bottom_dxa=bottom,
             margin_left_dxa=left,
             margin_right_dxa=right,
+            break_type=break_type,
         )
 
     def get_page_dimensions(self) -> tuple[int, int]:
@@ -124,16 +150,28 @@ class SectionLayout:
     def apply_to_sect_pr(
         self,
         sect_pr: etree.Element,
-        section_type: str = "nextPage",
+        section_type: str | None = None,
     ) -> etree.Element:
         """Applies this layout's geometry to an OpenXML <w:sectPr> element, preserving existing headers/footers."""
         w, h = self.get_page_dimensions()
 
-        # 1. <w:type w:val="nextPage"/>
+        # 1. <w:type w:val="..."/>
+        actual_type = section_type if section_type is not None else self.break_type
+        val_map = {
+            "continuous": "continuous",
+            "nextpage": "nextPage",
+            "next_page": "nextPage",
+            "evenpage": "evenPage",
+            "even_page": "evenPage",
+            "oddpage": "oddPage",
+            "odd_page": "oddPage",
+        }
+        word_type = val_map.get(actual_type.lower(), actual_type)
+
         type_el = sect_pr.find(f"{{{W_NS}}}type")
         if type_el is None:
             type_el = etree.SubElement(sect_pr, f"{{{W_NS}}}type")
-        type_el.set(f"{{{W_NS}}}val", section_type)
+        type_el.set(f"{{{W_NS}}}val", word_type)
 
         # 2. <w:pgSz w:w="..." w:h="..." w:orient="..."/>
         pg_sz = sect_pr.find(f"{{{W_NS}}}pgSz")

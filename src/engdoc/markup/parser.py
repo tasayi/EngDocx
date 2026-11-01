@@ -12,15 +12,64 @@ from engdoc.markup.models import DirectiveBlock, EMDDocument, FrontmatterMetadat
 # Regex patterns for EMD directives
 FRONTMATTER_REGEX = re.compile(r"^---\s*\n(.*?)\n(?:---|\.\.\.)\s*\n", re.DOTALL)
 BLOCK_DIRECTIVE_REGEX = re.compile(
-    r"^@(?P<type>section|figure)(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+    r"^@(?P<type>section|figure)(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
     re.MULTILINE | re.DOTALL,
 )
 LAYOUT_SHORTHAND_REGEX = re.compile(
-    r"^@layout[ \t]+(?P<val>landscape|portrait|two-column|single-column)[ \t]*$",
+    r"^@layout[ \t]+(?P<val>landscape|portrait|two-column|single-column|continuous|next-page|even-page|odd-page)[ \t]*$",
     re.MULTILINE | re.IGNORECASE,
 )
 PAGEBREAK_REGEX = re.compile(r"^@pagebreak[ \t]*$", re.MULTILINE)
 SECTIONBREAK_REGEX = re.compile(r"^@sectionbreak[ \t]*$", re.MULTILINE)
+
+
+def parse_section_params(header: str | None, body_text: str | None) -> dict[str, Any]:
+    """Parses parameters from both the directive header line and block body."""
+    params: dict[str, Any] = {}
+
+    if header:
+        h = header.strip()
+        h_lower = h.lower()
+        if "continuous" in h_lower or "same-page" in h_lower or "same_page" in h_lower:
+            params["type"] = "continuous"
+        elif "next-page" in h_lower or "next_page" in h_lower or "nextpage" in h_lower:
+            params["type"] = "next_page"
+        elif "even" in h_lower:
+            params["type"] = "even_page"
+        elif "odd" in h_lower:
+            params["type"] = "odd_page"
+
+        if "landscape" in h_lower:
+            params["orientation"] = "landscape"
+        elif "portrait" in h_lower:
+            params["orientation"] = "portrait"
+
+        # Check key: value pairs in header
+        for part in re.split(r"[,;]\s*|\s+(?=[a-zA-Z_]+:)", h):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                params[k.strip().lower()] = v.strip().strip("\"'")
+
+    if body_text:
+        for line in body_text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if ":" in line:
+                k, v = line.split(":", 1)
+                params[k.strip().lower()] = v.strip().strip("\"'")
+            else:
+                l_lower = line.lower()
+                if l_lower in ("continuous", "next_page", "nextpage", "even_page", "evenpage", "odd_page", "oddpage"):
+                    params["type"] = l_lower
+                elif l_lower in ("landscape", "portrait"):
+                    params["orientation"] = l_lower
+                elif l_lower in ("two-column", "2-column"):
+                    params["columns"] = 2
+                elif l_lower in ("single-column", "1-column"):
+                    params["columns"] = 1
+
+    return params
 
 
 class EMDParser:
@@ -73,17 +122,22 @@ class EMDParser:
         # Find block directives (@section, @figure)
         for match in BLOCK_DIRECTIVE_REGEX.finditer(body):
             d_type = match.group("type")
-            d_id = match.group("id")
+            d_header = match.group("header")
             d_body = match.group("body")
 
-            params: dict[str, Any] = {}
-            for line in d_body.splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    params[key.strip()] = val.strip().strip("\"'")
+            if d_type == "section":
+                params = parse_section_params(d_header, d_body)
+                d_id = None
+            else:
+                d_id = d_header.strip() if d_header else None
+                params = {}
+                for line in d_body.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        params[key.strip().lower()] = val.strip().strip("\"'")
 
             directives.append(
                 DirectiveBlock(
@@ -165,23 +219,27 @@ class EMDParser:
                 return make_section_marker({"columns": 2})
             elif val == "single-column":
                 return make_section_marker({"columns": 1})
+            elif val == "continuous":
+                return make_section_marker({"type": "continuous"})
+            elif val == "next-page":
+                return make_section_marker({"type": "next_page"})
+            elif val == "even-page":
+                return make_section_marker({"type": "even_page"})
+            elif val == "odd-page":
+                return make_section_marker({"type": "odd_page"})
             return ""
 
         content = LAYOUT_SHORTHAND_REGEX.sub(layout_repl, content)
 
         # 4. Transform @section ... @end blocks into section markers
         def section_repl(m: re.Match) -> str:
+            header_text = m.group("header")
             body_text = m.group("body")
-            params: dict[str, Any] = {}
-            for line in body_text.splitlines():
-                line = line.strip()
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    params[k.strip().lower()] = v.strip().strip("\"'")
+            params = parse_section_params(header_text, body_text)
             return make_section_marker(params)
 
         content = re.sub(
-            r"^@section[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            r"^@section(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
             section_repl,
             content,
             flags=re.MULTILINE | re.DOTALL,

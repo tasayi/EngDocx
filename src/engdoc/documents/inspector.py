@@ -365,6 +365,13 @@ class DocxInspector:
                     except ValueError:
                         cols = 1
 
+            type_elem = sect.find(f"{{{NAMESPACES['w']}}}type")
+            start_type = (
+                type_elem.get(f"{{{NAMESPACES['w']}}}val", "nextPage")
+                if type_elem is not None
+                else "nextPage"
+            )
+
             title_pg = sect.find(f"{{{NAMESPACES['w']}}}titlePg")
             different_first_page = (
                 title_pg is not None
@@ -383,6 +390,7 @@ class DocxInspector:
                     margins_dxa=margins_dxa,
                     margins_mm=margins_mm,
                     columns=cols,
+                    start_type=start_type,
                     different_first_page_header_footer=different_first_page,
                 )
             )

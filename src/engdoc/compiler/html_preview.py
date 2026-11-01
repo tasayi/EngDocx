@@ -10,7 +10,7 @@ from typing import Any
 from engdoc.compiler.runner import PandocRunner
 from engdoc.figures.registry import FigureRegistryManager
 from engdoc.figures.service import format_figure_caption
-from engdoc.markup.parser import EMDParser
+from engdoc.markup.parser import EMDParser, parse_section_params
 
 
 @dataclass
@@ -45,45 +45,75 @@ class HTMLPreviewGenerator:
             flags=re.MULTILINE,
         )
 
-        # 2. Transform @section / @layout to visual section break markers
+        # 2. Transform @section / @layout to visual section break markers and multi-column containers
         def section_preview_repl(m: re.Match) -> str:
             val = m.groupdict().get("val", "").lower()
             orient = "landscape" if "land" in val else "portrait"
             cols = "2" if "two" in val else "1"
+            b_type = "next-page" if orient == "landscape" else "continuous"
+            tag_label = (
+                f"Continuous Section Break ({cols} Col)"
+                if b_type == "continuous"
+                else f"Section Break (Next Page – {orient.capitalize()}, {cols} Col)"
+            )
+            col_class = f"columns-{cols}" if cols in ("2", "3") else "columns-1"
             return (
-                f'\n<div class="preview-section-marker" data-orientation="{orient}" data-columns="{cols}">'
-                f'<span class="section-tag">Section Break ({orient.capitalize()}, {cols} Col)</span></div>\n'
+                f'\n</div>\n'
+                f'<div class="preview-section-marker {b_type}" data-orientation="{orient}" data-columns="{cols}" data-type="{b_type}">'
+                f'<span class="section-tag">{tag_label}</span></div>\n'
+                f'<div class="preview-continuous-section {col_class}">\n'
             )
 
         content = re.sub(
-            r"^@layout[ \t]+(?P<val>landscape|portrait|two-column|single-column)[ \t]*$",
+            r"^@layout[ \t]+(?P<val>landscape|portrait|two-column|single-column|continuous|next-page|even-page|odd-page)[ \t]*$",
             section_preview_repl,
             content,
             flags=re.MULTILINE | re.IGNORECASE,
         )
 
         def section_block_repl(m: re.Match) -> str:
+            header_text = m.group("header")
             body_text = m.group("body")
-            params: dict[str, str] = {}
-            for line in body_text.splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    params[k.strip().lower()] = v.strip().strip("\"'")
+            params = parse_section_params(header_text, body_text)
 
             orient = params.get("orientation", "portrait")
-            cols = params.get("columns", "1")
+            cols = str(params.get("columns", "1"))
             page = params.get("page", "A4")
+            raw_type = str(params.get("type", "")).lower()
+
+            if "next" in raw_type:
+                b_type = "next-page"
+                tag_label = f"Section Break (Next Page – {page} {orient.capitalize()}, {cols} Col)"
+            elif "even" in raw_type:
+                b_type = "even-page"
+                tag_label = f"Section Break (Even Page – {page} {orient.capitalize()}, {cols} Col)"
+            elif "odd" in raw_type:
+                b_type = "odd-page"
+                tag_label = f"Section Break (Odd Page – {page} {orient.capitalize()}, {cols} Col)"
+            elif "orientation" in params and "land" in orient.lower():
+                b_type = "next-page"
+                tag_label = f"Section Break (Next Page – {page} {orient.capitalize()}, {cols} Col)"
+            else:
+                b_type = "continuous"
+                tag_label = f"Continuous Section Break ({cols} Col)"
+
+            col_class = f"columns-{cols}" if cols in ("2", "3") else "columns-1"
             return (
-                f'\n<div class="preview-section-marker" data-orientation="{orient}" data-columns="{cols}" data-page="{page}">'
-                f'<span class="section-tag">Section: {page} {orient.capitalize()} ({cols} Col)</span></div>\n'
+                f'\n</div>\n'
+                f'<div class="preview-section-marker {b_type}" data-orientation="{orient}" data-columns="{cols}" data-page="{page}" data-type="{b_type}">'
+                f'<span class="section-tag">{tag_label}</span></div>\n'
+                f'<div class="preview-continuous-section {col_class}">\n'
             )
 
         content = re.sub(
-            r"^@section[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            r"^@section(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
             section_block_repl,
             content,
             flags=re.MULTILINE | re.DOTALL,
         )
+
+        # Wrap in initial section container
+        content = f'<div class="preview-continuous-section columns-1">\n{content}\n</div>'
 
         # 3. Resolve figures for preview
         fig_counter = 0

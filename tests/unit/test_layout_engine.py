@@ -143,3 +143,115 @@ async def test_multi_section_document_compilation(tmp_path: Path):
     # 3. Verify PublishingService stats report 4 sections
     stats = PublishingService.validate_generated_docx(processed_docx)
     assert stats["sections"] == 4
+
+
+@pytest.mark.asyncio
+async def test_continuous_section_break_same_page(tmp_path: Path):
+    """Verifies that multi-column section transitions default to continuous and remain on the same page."""
+    emd = """# Executive Summary (1 Column)
+
+Full-width introductory paragraph spanning the page header.
+
+@section
+  type: continuous
+  columns: 2
+@end
+
+Column A: First column of continuous section.
+
+Column B: Second column of continuous section.
+
+@section
+  type: continuous
+  columns: 1
+@end
+
+Full-width footer paragraph closing the page.
+"""
+    emd_doc = EMDParser.parse(emd)
+    preprocessed_md = EMDParser.preprocess_for_pandoc(emd_doc)
+
+    raw_docx = tmp_path / "raw_continuous.docx"
+    res = await PandocRunner.compile_to_docx(
+        markdown_text=preprocessed_md,
+        output_path=raw_docx,
+    )
+    assert res.success is True
+
+    processed_docx = DocxPostprocessor.process(raw_docx)
+    assert processed_docx.is_file()
+
+    with zipfile.ZipFile(processed_docx, "r") as zf:
+        xml_bytes = zf.read("word/document.xml")
+        root = etree.fromstring(xml_bytes)
+
+        sect_prs = root.xpath(".//w:sectPr", namespaces=NSMAP)
+        assert len(sect_prs) == 3, f"Expected 3 sections, found {len(sect_prs)}"
+
+        # Verify all sections have continuous break type
+        for i, sect in enumerate(sect_prs):
+            type_vals = sect.xpath("./w:type/@w:val", namespaces=NSMAP)
+            assert type_vals == ["continuous"], f"Section {i} should be continuous, got {type_vals}"
+
+        # Section 0: 1 col, Section 1: 2 col, Section 2: 1 col
+        cols_0 = sect_prs[0].xpath("./w:cols/@w:num", namespaces=NSMAP)
+        cols_1 = sect_prs[1].xpath("./w:cols/@w:num", namespaces=NSMAP)
+        cols_2 = sect_prs[2].xpath("./w:cols/@w:num", namespaces=NSMAP)
+
+        assert cols_0 == ["1"]
+        assert cols_1 == ["2"]
+        assert cols_2 == ["1"]
+
+
+@pytest.mark.asyncio
+async def test_all_word_section_break_types(tmp_path: Path):
+    """Verifies all MS Word section break types: continuous, nextPage, evenPage, oddPage."""
+    emd = """# Section 1: Standard
+
+@section
+  type: continuous
+  columns: 2
+@end
+
+# Section 2: Continuous 2-Col
+
+@section
+  type: next_page
+  columns: 1
+@end
+
+# Section 3: Next Page
+
+@section
+  type: odd_page
+  columns: 1
+@end
+
+# Section 4: Odd Page Chapter
+
+@section
+  type: even_page
+  columns: 1
+@end
+
+# Section 5: Even Page Notes
+"""
+    emd_doc = EMDParser.parse(emd)
+    preprocessed_md = EMDParser.preprocess_for_pandoc(emd_doc)
+
+    raw_docx = tmp_path / "raw_types.docx"
+    res = await PandocRunner.compile_to_docx(
+        markdown_text=preprocessed_md,
+        output_path=raw_docx,
+    )
+    assert res.success is True
+
+    processed_docx = DocxPostprocessor.process(raw_docx)
+    with zipfile.ZipFile(processed_docx, "r") as zf:
+        root = etree.fromstring(zf.read("word/document.xml"))
+        sect_prs = root.xpath(".//w:sectPr", namespaces=NSMAP)
+        assert len(sect_prs) == 5
+
+        types = [s.xpath("./w:type/@w:val", namespaces=NSMAP)[0] for s in sect_prs]
+        assert types == ["continuous", "nextPage", "oddPage", "evenPage", "evenPage"]
+
