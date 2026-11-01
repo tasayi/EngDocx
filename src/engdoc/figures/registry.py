@@ -120,3 +120,62 @@ class FigureRegistryManager:
             cls.save_registry(workspace_dir, registry)
             return True
         return False
+
+    @classmethod
+    def rename_figure(
+        cls,
+        workspace_dir: Path,
+        old_id: str,
+        new_id: str,
+        new_caption: str | None = None,
+    ) -> FigureMetadata:
+        """Renames a figure ID and/or updates caption, preserving compiled cache assets."""
+        registry = cls.load_registry(workspace_dir)
+        if old_id not in registry.figures:
+            raise KeyError(f"Figure [{old_id}] not found in registry.")
+
+        if new_id != old_id and new_id in registry.figures:
+            raise ValueError(f"Figure [{new_id}] already exists in registry.")
+
+        fig = registry.figures.pop(old_id)
+        fig.id = new_id
+        if new_caption is not None:
+            fig.caption = new_caption
+
+        # Rename cache compiled asset if old_id changed
+        if new_id != old_id and fig.compiled_asset:
+            old_compiled = workspace_dir / fig.compiled_asset
+            if old_compiled.is_file():
+                new_compiled_name = f"{new_id}{old_compiled.suffix}"
+                new_compiled = old_compiled.parent / new_compiled_name
+                try:
+                    old_compiled.rename(new_compiled)
+                    fig.compiled_asset = f"{old_compiled.parent.relative_to(workspace_dir)}/{new_compiled_name}".replace("\\", "/")
+                except Exception:
+                    pass
+
+        registry.figures[new_id] = fig
+        cls.save_registry(workspace_dir, registry)
+        return fig
+
+    @classmethod
+    def batch_delete_figures(cls, workspace_dir: Path, figure_ids: list[str]) -> int:
+        """Batch removes multiple figures from the registry and deletes their assets."""
+        registry = cls.load_registry(workspace_dir)
+        deleted_count = 0
+        for fig_id in figure_ids:
+            if fig_id in registry.figures:
+                fig = registry.figures.pop(fig_id)
+                for path_str in (fig.source, fig.compiled_asset):
+                    if path_str:
+                        p = workspace_dir / path_str
+                        if p.is_file():
+                            try:
+                                p.unlink()
+                            except Exception:
+                                pass
+                deleted_count += 1
+
+        if deleted_count > 0:
+            cls.save_registry(workspace_dir, registry)
+        return deleted_count

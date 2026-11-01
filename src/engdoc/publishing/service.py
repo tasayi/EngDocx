@@ -1,5 +1,6 @@
 """EngDoc Publishing and Compilation Service."""
 
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,8 +48,17 @@ class PublishingService:
         if not entry_file.is_file():
             raise ProjectArchiveError(f"Entry document not found: {entry_rel}")
 
-        # 1. Read and parse EMD content
-        raw_text = entry_file.read_text(encoding="utf-8")
+        # 1. Read and parse EMD content (supporting multi-document suites in content/)
+        content_parts = [entry_file.read_text(encoding="utf-8")]
+        content_dir = session.workspace_dir / "content"
+        if content_dir.is_dir():
+            for root, _, files in os.walk(content_dir):
+                for f in sorted(files):
+                    f_path = Path(root) / f
+                    if f_path.suffix.lower() in (".md", ".emd") and f_path != entry_file:
+                        content_parts.append(f"\n\n@pagebreak\n\n{f_path.read_text(encoding='utf-8')}")
+
+        raw_text = "\n".join(content_parts)
         emd_doc = EMDParser.parse(raw_text)
 
         # 2. Prepare all registered figures and ensure compiled assets in .cache/

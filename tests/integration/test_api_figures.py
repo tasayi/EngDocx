@@ -118,3 +118,67 @@ async def test_figure_lifecycle_and_docx_embedding(async_client: AsyncClient, tm
     assert list_after.status_code == 200
     assert len(list_after.json()["figures"]) == 0
 
+
+@pytest.mark.asyncio
+async def test_figure_rename_and_batch_delete(async_client: AsyncClient, tmp_path: Path):
+    target_archive = str(tmp_path / "batch_fig.mdoc")
+
+    # 1. Create project
+    create_res = await async_client.post(
+        "/api/projects/new",
+        json={
+            "project_name": "Antenna Array",
+            "document_number": "ENG-ANT-001",
+            "output_path": target_archive,
+        },
+    )
+    assert create_res.status_code == 201
+    session_id = create_res.json()["session_id"]
+
+    # 2. Upload two SVG figures
+    upload_res1 = await async_client.post(
+        f"/api/figures/{session_id}/upload",
+        files={"file": ("antenna1.svg", io.BytesIO(SAMPLE_SVG.encode("utf-8")), "image/svg+xml")},
+        data={"caption": "Antenna 1 diagram", "width": "14cm", "figure_id": "FIG-001"},
+    )
+    assert upload_res1.status_code == 201
+
+    upload_res2 = await async_client.post(
+        f"/api/figures/{session_id}/upload",
+        files={"file": ("antenna2.svg", io.BytesIO(SAMPLE_SVG_V2.encode("utf-8")), "image/svg+xml")},
+        data={"caption": "Antenna 2 diagram", "width": "14cm", "figure_id": "FIG-002"},
+    )
+    assert upload_res2.status_code == 201
+
+    # 3. Rename FIG-001 -> FIG-101 with new caption
+    rename_res = await async_client.put(
+        f"/api/figures/{session_id}/FIG-001/rename",
+        json={"new_id": "FIG-101", "caption": "Updated primary array antenna"},
+    )
+    assert rename_res.status_code == 200
+    rename_data = rename_res.json()
+    assert rename_data["id"] == "FIG-101"
+    assert rename_data["caption"] == "Updated primary array antenna"
+
+    # Verify listing reflects the rename
+    list_res = await async_client.get(f"/api/figures/{session_id}")
+    fig_ids = [f["id"] for f in list_res.json()["figures"]]
+    assert "FIG-101" in fig_ids
+    assert "FIG-001" not in fig_ids
+    assert "FIG-002" in fig_ids
+
+    # 4. Batch delete both FIG-101 and FIG-002
+    batch_del_res = await async_client.post(
+        f"/api/figures/{session_id}/batch-delete",
+        json={"figure_ids": ["FIG-101", "FIG-002"]},
+    )
+    assert batch_del_res.status_code == 200
+    del_data = batch_del_res.json()
+    assert del_data["success"] is True
+    assert del_data["deleted_count"] == 2
+
+    # Verify figures registry is now empty
+    list_empty = await async_client.get(f"/api/figures/{session_id}")
+    assert len(list_empty.json()["figures"]) == 0
+
+

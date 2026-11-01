@@ -97,4 +97,56 @@ async def test_list_templates_api_endpoint(async_client: AsyncClient):
     assert any("default" in t for t in data["templates"])
 
 
+@pytest.mark.asyncio
+async def test_compile_multi_document_suite(async_client: AsyncClient, tmp_path: Path):
+    # 1. Create project
+    create_res = await async_client.post(
+        "/api/projects/new",
+        json={
+            "project_name": "Multi-Doc Subsystem",
+            "document_number": "ENG-MD-001",
+            "output_path": str(tmp_path / "multidoc.mdoc"),
+        },
+    )
+    assert create_res.status_code == 201
+    session_id = create_res.json()["session_id"]
+
+    # 2. Populate main.md
+    await async_client.put(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/main.md", "content": "# Section 1: Executive Summary\n\nMain content here.\n"},
+    )
+
+    # 3. Add secondary documents in content/
+    await async_client.post(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/appendix_a.md", "content": "# Appendix A: Telemetry Logs\n\nRaw telemetry records.\n"},
+    )
+    await async_client.post(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/appendix_b.md", "content": "# Appendix B: Calibration Data\n\nSensor coefficients.\n"},
+    )
+
+    # 4. Preview with content=None (concatenates multi-doc project)
+    preview_res = await async_client.post(
+        "/api/compile/preview",
+        json={"session_id": session_id, "content": None},
+    )
+    assert preview_res.status_code == 200
+    p_html = preview_res.json()["html"]
+    assert "Executive Summary" in p_html
+    assert "Telemetry Logs" in p_html
+    assert "Calibration Data" in p_html
+
+    # 5. Compile to DOCX
+    comp_res = await async_client.post(
+        "/api/compile/docx",
+        json={"session_id": session_id, "output_filename": "MultiDoc_Report.docx"},
+    )
+    assert comp_res.status_code == 200
+    comp_data = comp_res.json()
+    assert comp_data["success"] is True
+    assert comp_data["stats"]["headings"] >= 3
+
+
 

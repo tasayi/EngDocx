@@ -241,3 +241,61 @@ async def test_project_assets_serving_and_save_as(async_client: AsyncClient, tmp
     assert Path(save_as_path).is_file()
 
 
+@pytest.mark.asyncio
+async def test_new_project_without_path_save_and_save_as(async_client: AsyncClient, tmp_path: Path):
+    # 1. Create project without specifying output_path
+    create_res = await async_client.post(
+        "/api/projects/new",
+        json={
+            "project_name": "In Memory Project",
+            "document_number": "ENG-MEM-001",
+            "revision": "A",
+        },
+    )
+    assert create_res.status_code == 201
+    create_data = create_res.json()
+    session_id = create_data["session_id"]
+    assert create_data["has_explicit_archive_path"] is False
+    assert create_data["project_path"] == ""
+
+    # 2. Modify document
+    await async_client.put(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/main.md", "content": "# First Save Content"},
+    )
+
+    # 3. First save specifies explicit path (as prompted by save modal)
+    dest_path1 = str(tmp_path / "first_saved.mdoc")
+    save1 = await async_client.post(
+        f"/api/projects/{session_id}/save",
+        json={"output_path": dest_path1},
+    )
+    assert save1.status_code == 200
+    data1 = save1.json()
+    assert data1["has_explicit_archive_path"] is True
+    assert data1["archive_path"] == dest_path1
+    assert Path(dest_path1).is_file()
+
+    # 4. Subsequent save overwrites destination without needing output_path
+    await async_client.put(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/main.md", "content": "# Second Save Content (Overwritten)"},
+    )
+    save2 = await async_client.post(f"/api/projects/{session_id}/save")
+    assert save2.status_code == 200
+    data2 = save2.json()
+    assert data2["archive_path"] == dest_path1
+
+    # 5. Save As writes to a new second destination
+    dest_path2 = str(tmp_path / "second_saved_as.mdoc")
+    save3 = await async_client.post(
+        f"/api/projects/{session_id}/save",
+        json={"output_path": dest_path2},
+    )
+    assert save3.status_code == 200
+    data3 = save3.json()
+    assert data3["archive_path"] == dest_path2
+    assert Path(dest_path2).is_file()
+
+
+

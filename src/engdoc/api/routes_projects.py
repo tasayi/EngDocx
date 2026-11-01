@@ -30,6 +30,7 @@ class CreateProjectResponse(BaseModel):
     session_id: str
     project_path: str
     manifest: ProjectManifest
+    has_explicit_archive_path: bool = False
 
 class OpenProjectResponse(BaseModel):
     success: bool
@@ -51,9 +52,7 @@ class SaveProjectResponse(BaseModel):
 @router.post("/new", response_model=CreateProjectResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_project(req: CreateProjectRequest) -> CreateProjectResponse:
     """Creates a new .mdoc project container and opens an active session for it."""
-    output_path = Path(
-        req.output_path or f"{req.document_number}_{req.project_name.replace(' ', '_')}.mdoc"
-    )
+    output_path = Path(req.output_path) if req.output_path else None
     manifest = ProjectManifest(
         project_name=req.project_name,
         document_number=req.document_number,
@@ -64,8 +63,9 @@ async def create_new_project(req: CreateProjectRequest) -> CreateProjectResponse
         return CreateProjectResponse(
             success=True,
             session_id=session.session_id,
-            project_path=str(session.archive_path or output_path),
+            project_path=str(session.archive_path) if session.archive_path else "",
             manifest=manifest,
+            has_explicit_archive_path=session.has_explicit_archive_path,
         )
     except EngDocError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

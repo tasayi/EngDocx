@@ -5,6 +5,28 @@
 import { insertSnippet } from './editor.js';
 
 export function initPropertiesPanel() {
+  const panelProp = document.getElementById('panel-properties');
+  const resizerProp = document.getElementById('resizer-prop');
+  const btnToggleProp = document.getElementById('btn-toggle-properties');
+  const btnCloseProp = document.getElementById('btn-close-properties');
+
+  const toggleProperties = () => {
+    if (!panelProp) return;
+    const isCollapsed = panelProp.classList.contains('collapsed');
+    if (isCollapsed) {
+      panelProp.classList.remove('collapsed');
+      if (resizerProp) resizerProp.style.display = '';
+      if (btnToggleProp) btnToggleProp.classList.add('btn-accent');
+    } else {
+      panelProp.classList.add('collapsed');
+      if (resizerProp) resizerProp.style.display = 'none';
+      if (btnToggleProp) btnToggleProp.classList.remove('btn-accent');
+    }
+  };
+
+  btnToggleProp?.addEventListener('click', toggleProperties);
+  btnCloseProp?.addEventListener('click', toggleProperties);
+
   const orientBtns = document.querySelectorAll('#group-orientation .group-btn');
   const colBtns = document.querySelectorAll('#group-columns .group-btn');
   const pageSizeSelect = document.getElementById('prop-page-size');

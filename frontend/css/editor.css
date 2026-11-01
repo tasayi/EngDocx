@@ -224,6 +224,19 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.figure-card:hover {
+  border-color: var(--border-light);
+}
+
+.figure-card.selected {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px var(--accent-color);
+  background-color: rgba(37, 99, 235, 0.08);
 }
 
 .figure-card-preview {

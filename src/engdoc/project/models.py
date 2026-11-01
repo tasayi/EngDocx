@@ -86,6 +86,7 @@ class TreeItem(BaseModel):
     item_type: Literal["file", "directory"]
     category: Literal["document", "figure", "template", "metadata", "other"]
     size_bytes: int = 0
+    is_master: bool = False
     children: list["TreeItem"] = Field(default_factory=list)
 
 class ResourceTreeResponse(BaseModel):

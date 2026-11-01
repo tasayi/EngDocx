@@ -76,7 +76,13 @@ class ProjectState {
         this.tree.documents.forEach((doc) => {
           const li = document.createElement('li');
           li.dataset.path = doc.path;
-          li.innerHTML = `<span class="tree-icon">📝</span> ${doc.name}`;
+          const isMaster = doc.is_master || (this.manifest && doc.path === this.manifest.entry_point);
+          const label = isMaster ? `★ ${doc.name} [Master]` : doc.name;
+          li.innerHTML = `<span class="tree-icon">📝</span> ${label}`;
+          if (isMaster) {
+            li.title = `${doc.path} (Master Entry Point Document)`;
+            li.style.fontWeight = '600';
+          }
           if (this.activeTab === doc.path) li.classList.add('active');
           li.addEventListener('click', () => this.openDocument(doc.path));
           treeDocs.appendChild(li);
@@ -369,8 +375,56 @@ class ProjectState {
 export const projectState = new ProjectState();
 
 export function initProjectManager() {
-  // New Project Dialog
-  const btnNewProj = document.getElementById('btn-new-proj');
+  // Dropdown Menu Controllers
+  const setupDropdown = (btnId, menuId) => {
+    const btn = document.getElementById(btnId);
+    const menu = document.getElementById(menuId);
+    if (!btn || !menu) return;
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.dropdown-menu.show').forEach((other) => {
+        if (other !== menu) other.classList.remove('show');
+      });
+      menu.classList.toggle('show');
+    });
+
+    menu.querySelectorAll('.dropdown-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        menu.classList.remove('show');
+      });
+    });
+  };
+
+  setupDropdown('btn-menu-file', 'dropdown-file');
+  setupDropdown('btn-menu-edit', 'dropdown-edit');
+  setupDropdown('btn-menu-insert', 'dropdown-insert');
+
+  window.addEventListener('click', () => {
+    document.querySelectorAll('.dropdown-menu.show').forEach((menu) => {
+      menu.classList.remove('show');
+    });
+  });
+
+  // Publish Modal Controller declaration
+  const modalPublish = document.getElementById('modal-publish');
+  const pubStatusMsg = document.getElementById('pub-status-msg');
+  const pubResultsLinks = document.getElementById('pub-results-links');
+
+  const openPublishModal = () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    if (modalPublish) {
+      modalPublish.style.display = 'flex';
+      if (pubStatusMsg) pubStatusMsg.textContent = '';
+      if (pubResultsLinks) pubResultsLinks.innerHTML = '';
+    }
+  };
+
+  // 1. New Project Dialog
+  const btnNewProj = document.getElementById('menu-item-new');
   const modalNewProj = document.getElementById('modal-new-project');
   const modalCloseBtn = document.getElementById('modal-close-btn');
   const modalCancelBtn = document.getElementById('modal-cancel-btn');
@@ -411,15 +465,21 @@ export function initProjectManager() {
 
         const treeRes = await fetch(`/api/projects/${created.session_id}/tree`);
         const tree = await treeRes.json();
-        await projectState.setSession(created.session_id, created.manifest, tree, created.project_path, true);
+        await projectState.setSession(
+          created.session_id,
+          created.manifest,
+          tree,
+          created.project_path,
+          created.has_explicit_archive_path || false
+        );
       } catch (err) {
         alert(`Failed to create project: ${err.message}`);
       }
     });
   }
 
-  // Open Project Dialog (File Picker + Server Path + Sample)
-  const btnOpenProj = document.getElementById('btn-open-proj');
+  // 2. Open Project Dialog (File Picker + Server Path + Sample)
+  const btnOpenProj = document.getElementById('menu-item-open');
   const modalOpenProj = document.getElementById('modal-open-project');
   const modalOpenClose = document.getElementById('modal-open-close-btn');
   const modalOpenCancel = document.getElementById('modal-open-cancel-btn');
@@ -437,7 +497,6 @@ export function initProjectManager() {
     modalOpenClose?.addEventListener('click', closeOpenModal);
     modalOpenCancel?.addEventListener('click', closeOpenModal);
 
-    // Option 1: Native file input
     btnBrowseOpenFile?.addEventListener('click', () => {
       inputOpenFile?.click();
     });
@@ -468,7 +527,6 @@ export function initProjectManager() {
       }
     });
 
-    // Option 2: Path input
     modalOpenSubmit?.addEventListener('click', async () => {
       const path = document.getElementById('modal-open-path-input')?.value.trim();
       if (!path) {
@@ -494,7 +552,6 @@ export function initProjectManager() {
       }
     });
 
-    // Option 3: Sample Project Shortcut
     btnOpenSample?.addEventListener('click', async () => {
       try {
         const res = await fetch('/api/projects/open', {
@@ -515,20 +572,69 @@ export function initProjectManager() {
     });
   }
 
-  // Insert Menu Dropdown
-  const btnMenuInsert = document.getElementById('btn-menu-insert');
+  // 3. Save, Save As & Publish from File Menu
+  const btnSave = document.getElementById('menu-item-save');
+  const btnSaveAs = document.getElementById('menu-item-save-as');
+  const btnPublishFile = document.getElementById('menu-item-publish-file');
+  const modalSave = document.getElementById('modal-save-project');
+  const modalSaveClose = document.getElementById('modal-save-close-btn');
+  const modalSaveCancel = document.getElementById('modal-save-cancel-btn');
+  const modalSaveSubmit = document.getElementById('modal-save-submit-btn');
+  const modalSaveInput = document.getElementById('modal-save-path-input');
+  const modalSaveStatus = document.getElementById('modal-save-status');
+
+  const openSaveAsModal = () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    if (modalSave && modalSaveInput) {
+      const defaultName = `${projectState.manifest?.document_number || 'ENG-DOC'}_${(projectState.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
+      modalSaveInput.value = projectState.archivePath || defaultName;
+      if (modalSaveStatus) modalSaveStatus.textContent = '';
+      modalSave.style.display = 'flex';
+      modalSaveInput.focus();
+    }
+  };
+
+  btnSave?.addEventListener('click', () => {
+    projectState.saveProjectArchive();
+  });
+
+  btnSaveAs?.addEventListener('click', openSaveAsModal);
+  btnPublishFile?.addEventListener('click', openPublishModal);
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      projectState.saveProjectArchive();
+    }
+  });
+
+  const closeSaveModal = () => {
+    if (modalSave) modalSave.style.display = 'none';
+  };
+  modalSaveClose?.addEventListener('click', closeSaveModal);
+  modalSaveCancel?.addEventListener('click', closeSaveModal);
+
+  modalSaveSubmit?.addEventListener('click', async () => {
+    const customPath = modalSaveInput?.value.trim();
+    if (!customPath) {
+      alert('Please enter a destination path.');
+      return;
+    }
+    if (modalSaveStatus) modalSaveStatus.textContent = 'Saving archive...';
+    try {
+      await projectState.saveProjectArchive(customPath);
+      closeSaveModal();
+    } catch (err) {
+      if (modalSaveStatus) modalSaveStatus.textContent = `Save failed: ${err.message}`;
+    }
+  });
+
+  // 4. Insert Menu Snippets
   const dropdownInsert = document.getElementById('dropdown-insert');
-
-  if (btnMenuInsert && dropdownInsert) {
-    btnMenuInsert.addEventListener('click', (e) => {
-      e.stopPropagation();
-      dropdownInsert.classList.toggle('show');
-    });
-
-    window.addEventListener('click', () => {
-      dropdownInsert.classList.remove('show');
-    });
-
+  if (dropdownInsert) {
     dropdownInsert.querySelectorAll('[data-insert]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const type = btn.dataset.insert;
@@ -550,18 +656,8 @@ export function initProjectManager() {
     });
   }
 
-  // Layout Menu Trigger
-  const btnMenuLayout = document.getElementById('btn-menu-layout');
-  btnMenuLayout?.addEventListener('click', () => {
-    const propPanel = document.getElementById('panel-properties');
-    if (propPanel) {
-      propPanel.scrollIntoView({ behavior: 'smooth' });
-      document.getElementById('prop-page-size')?.focus();
-    }
-  });
-
-  // Figures Menu Trigger & Modal
-  const btnMenuFigures = document.getElementById('btn-menu-figures');
+  // 5. Edit Menu: Figures Gallery & Management
+  const btnMenuFigures = document.getElementById('menu-item-figures');
   const modalFigures = document.getElementById('modal-figures-manager');
   const modalFigClose = document.getElementById('modal-figures-close-btn');
   const modalFigDone = document.getElementById('modal-figures-done-btn');
@@ -584,19 +680,9 @@ export function initProjectManager() {
           insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '150mm'}"\n@end\n`);
           modalFigures.style.display = 'none';
         },
-        async (figId) => {
-          try {
-            await figureManager.deleteFigure(projectState.sessionId, figId);
-            await projectState.refreshTree();
-            await figureManager.renderGallery(
-              container,
-              projectState.sessionId,
-              null,
-              null
-            );
-          } catch (err) {
-            alert(`Delete failed: ${err.message}`);
-          }
+        async () => {
+          await projectState.refreshTree();
+          await figureManager.renderGallery(container, projectState.sessionId, null, null);
         }
       );
     }
@@ -668,72 +754,6 @@ export function initProjectManager() {
     modalTplClose?.addEventListener('click', () => (modalTemplates.style.display = 'none'));
     modalTplBottomClose?.addEventListener('click', () => (modalTemplates.style.display = 'none'));
   }
-
-  // Save & Save As Controls
-  const btnSave = document.getElementById('btn-save');
-  const btnSaveAs = document.getElementById('btn-save-as');
-  const modalSave = document.getElementById('modal-save-project');
-  const modalSaveClose = document.getElementById('modal-save-close-btn');
-  const modalSaveCancel = document.getElementById('modal-save-cancel-btn');
-  const modalSaveSubmit = document.getElementById('modal-save-submit-btn');
-  const modalSaveDownload = document.getElementById('modal-save-download-btn');
-  const modalSaveInput = document.getElementById('modal-save-path-input');
-  const modalSaveStatus = document.getElementById('modal-save-status');
-
-  const openSaveAsModal = () => {
-    if (!projectState.sessionId) {
-      alert('Please create or open a project first.');
-      return;
-    }
-    if (modalSave && modalSaveInput) {
-      const defaultName = `${projectState.manifest?.document_number || 'ENG-DOC'}_${(projectState.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
-      modalSaveInput.value = projectState.archivePath || defaultName;
-      if (modalSaveStatus) modalSaveStatus.textContent = '';
-      modalSave.style.display = 'flex';
-      modalSaveInput.focus();
-    }
-  };
-
-  btnSave?.addEventListener('click', () => {
-    projectState.saveProjectArchive();
-  });
-
-  btnSaveAs?.addEventListener('click', openSaveAsModal);
-
-  window.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      projectState.saveProjectArchive();
-    }
-  });
-
-  const closeSaveModal = () => {
-    if (modalSave) modalSave.style.display = 'none';
-  };
-  modalSaveClose?.addEventListener('click', closeSaveModal);
-  modalSaveCancel?.addEventListener('click', closeSaveModal);
-
-  modalSaveSubmit?.addEventListener('click', async () => {
-    const customPath = modalSaveInput?.value.trim();
-    if (!customPath) {
-      alert('Please enter a destination path.');
-      return;
-    }
-    if (modalSaveStatus) modalSaveStatus.textContent = 'Saving archive...';
-    try {
-      await projectState.saveProjectArchive(customPath);
-      closeSaveModal();
-    } catch (err) {
-      if (modalSaveStatus) modalSaveStatus.textContent = `Save failed: ${err.message}`;
-    }
-  });
-
-  modalSaveDownload?.addEventListener('click', async () => {
-    if (!projectState.sessionId) return;
-    await projectState.saveCurrentDocument();
-    window.location.href = `/api/projects/${projectState.sessionId}/download`;
-    closeSaveModal();
-  });
 
   // 1-Click Quick Build DOCX
   const btnBuild = document.getElementById('btn-build');
@@ -821,24 +841,11 @@ export function initProjectManager() {
 
   // Publish Modal (Comprehensive Multi-Format Publishing)
   const btnPublishMenu = document.getElementById('btn-menu-publish');
-  const modalPublish = document.getElementById('modal-publish');
   const modalPubClose = document.getElementById('modal-pub-close-btn');
   const modalPubCancel = document.getElementById('modal-pub-cancel-btn');
   const modalPubSubmit = document.getElementById('modal-pub-submit-btn');
-  const pubStatusMsg = document.getElementById('pub-status-msg');
-  const pubResultsLinks = document.getElementById('pub-results-links');
 
   if (modalPublish) {
-    const openPublishModal = () => {
-      if (!projectState.sessionId) {
-        alert('Please create or open a project first.');
-        return;
-      }
-      modalPublish.style.display = 'flex';
-      if (pubStatusMsg) pubStatusMsg.textContent = '';
-      if (pubResultsLinks) pubResultsLinks.innerHTML = '';
-    };
-
     btnPublishMenu?.addEventListener('click', openPublishModal);
 
     const closePubModal = () => (modalPublish.style.display = 'none');

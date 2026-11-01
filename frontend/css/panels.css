@@ -327,3 +327,8 @@
   background-color: var(--accent-color);
 }
 
+#panel-properties.collapsed {
+  display: none !important;
+}
+
+

@@ -21,6 +21,15 @@ class FigureListResponse(BaseModel):
     figures: list[FigureMetadata]
 
 
+class RenameFigureRequest(BaseModel):
+    new_id: str
+    caption: str | None = None
+
+
+class BatchDeleteFiguresRequest(BaseModel):
+    figure_ids: list[str]
+
+
 @router.get("/{session_id}", response_model=FigureListResponse)
 async def list_figures(session_id: str) -> FigureListResponse:
     """Retrieves all registered figures for the active project session."""
@@ -172,3 +181,49 @@ async def delete_figure(session_id: str, figure_id: str) -> dict[str, object]:
     session.is_dirty = True
     session.dirty_files.add("metadata/figures.yaml")
     return {"status": "deleted", "figure_id": figure_id, "success": True}
+
+
+@router.put("/{session_id}/{figure_id}/rename", response_model=FigureMetadata)
+async def rename_figure(
+    session_id: str,
+    figure_id: str,
+    req: RenameFigureRequest,
+) -> FigureMetadata:
+    """Renames a figure ID and/or updates caption."""
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    try:
+        updated = FigureRegistryManager.rename_figure(
+            session.workspace_dir,
+            old_id=figure_id,
+            new_id=req.new_id.strip(),
+            new_caption=req.caption,
+        )
+        session.is_dirty = True
+        session.dirty_files.add("metadata/figures.yaml")
+        return updated
+    except KeyError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+
+@router.post("/{session_id}/batch-delete")
+async def batch_delete_figures(
+    session_id: str,
+    req: BatchDeleteFiguresRequest,
+) -> dict[str, object]:
+    """Batch deletes multiple figures from the registry and disk."""
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    count = FigureRegistryManager.batch_delete_figures(session.workspace_dir, req.figure_ids)
+    session.is_dirty = True
+    session.dirty_files.add("metadata/figures.yaml")
+    return {"deleted_count": count, "success": True}
+

@@ -102,6 +102,7 @@ class ProjectSession:
                 for f in sorted(files):
                     f_path = Path(root) / f
                     rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
+                    is_master = (rel == self.manifest.entry_point)
                     documents.append(
                         TreeItem(
                             name=f,
@@ -109,6 +110,7 @@ class ProjectSession:
                             item_type="file",
                             category="document",
                             size_bytes=f_path.stat().st_size,
+                            is_master=is_master,
                         )
                     )
 
