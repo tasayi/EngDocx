@@ -1,0 +1,24 @@
+mdoc_version: "1.0.0"
+project_name: "Antenna Array Analysis"
+document_number: "ENG-ANT-002"
+revision: "A"
+created_at: "2026-11-01T09:00:00Z"
+updated_at: "2026-11-01T09:30:00Z"
+entry_point: "content/main.md"
+
+template:
+  default: "templates/technical_report.docx"
+  fallbacks:
+    - "templates/corporate.docx"
+
+resources:
+  figures_registry: "metadata/figures.yaml"
+  bibliography: "references/references.bib"
+  document_metadata: "metadata/document.yaml"
+
+build:
+  target_formats:
+    - docx
+    - pdf
+  strict_mode: true
+  preserve_intermediate: false

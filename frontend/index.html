@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EngDoc – Engineering Document Studio</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="stylesheet" href="/static/css/panels.css">
+  <link rel="stylesheet" href="/static/css/editor.css">
+</head>
+<body class="theme-dark">
+  <div id="app-container">
+    
+    <!-- Area 1: Application Toolbar -->
+    <header id="app-toolbar" class="toolbar">
+      <div class="brand">
+        <span class="brand-icon">📐</span>
+        <span class="brand-name">EngDoc</span>
+        <span class="brand-version">v0.1.0</span>
+      </div>
+      <nav class="toolbar-menu">
+        <button class="menu-btn" data-action="file">File</button>
+        <button class="menu-btn" data-action="edit">Edit</button>
+        <button class="menu-btn" data-action="insert">Insert</button>
+        <button class="menu-btn" data-action="layout">Layout</button>
+        <button class="menu-btn" data-action="figures">Figures</button>
+        <button class="menu-btn" data-action="references">References</button>
+        <button class="menu-btn" data-action="templates">Templates</button>
+        <button class="menu-btn primary" data-action="publish">Publish</button>
+      </nav>
+      <div class="toolbar-actions">
+        <button id="btn-save" class="btn-sm" title="Save Project (Ctrl+S)">💾 Save</button>
+        <button id="btn-build" class="btn-sm btn-accent" title="Compile DOCX">⚙️ Build</button>
+      </div>
+    </header>
+
+    <!-- Main Workspace (Panels) -->
+    <div id="workspace">
+      
+      <!-- Area 2: Project Navigator -->
+      <aside id="panel-navigator" class="panel resizable-panel">
+        <div class="panel-header">
+          <span>Project Navigator</span>
+          <button class="icon-btn" id="btn-new-file" title="New Document">+</button>
+        </div>
+        <div class="panel-content">
+          <div class="tree-group">
+            <div class="tree-title">📄 Documents</div>
+            <ul id="tree-documents" class="tree-list">
+              <li class="active"><span class="tree-icon">📝</span> main.md</li>
+              <li><span class="tree-icon">📝</span> introduction.md</li>
+              <li><span class="tree-icon">📝</span> architecture.md</li>
+            </ul>
+          </div>
+          <div class="tree-group">
+            <div class="tree-title">📊 Figures</div>
+            <ul id="tree-figures" class="tree-list">
+              <li><span class="tree-icon">🖼️</span> FIG-001 (receiver.svg)</li>
+              <li><span class="tree-icon">🖼️</span> FIG-002 (link_budget.svg)</li>
+            </ul>
+          </div>
+          <div class="tree-group">
+            <div class="tree-title">📑 Templates</div>
+            <ul id="tree-templates" class="tree-list">
+              <li><span class="tree-icon">📘</span> technical_report.docx</li>
+            </ul>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Panel Divider 1 -->
+      <div class="resizer" id="resizer-nav"></div>
+
+      <!-- Area 3: Markup Editor -->
+      <main id="panel-editor" class="panel">
+        <div class="panel-header">
+          <div class="file-tabs">
+            <div class="tab active">main.md <span class="tab-close">×</span></div>
+          </div>
+          <div class="editor-tools">
+            <button class="tool-btn" id="insert-section" title="Insert Section Directive">@section</button>
+            <button class="tool-btn" id="insert-figure" title="Insert Figure Directive">@figure</button>
+            <button class="tool-btn" id="insert-pagebreak" title="Insert Page Break">@pagebreak</button>
+          </div>
+        </div>
+        <div class="panel-content editor-wrapper">
+          <textarea id="emd-editor" spellcheck="false">---
+title: RF Receiver Subsystem Design
+document_number: ENG-RX-001
+revision: A
+author: Radar Systems Engineering
+template: technical_report.docx
+---
+
+# 1. System Overview
+
+The receiver architecture implements a dual-conversion heterodyne topology.
+
+@layout landscape
+
+# 2. Block Diagram & Layout
+
+@figure FIG-001
+  width: 22cm
+  alignment: center
+  caption: High-level dual-conversion RF receiver schematic.
+@end
+
+@layout portrait
+
+# 3. Link Budget Analysis
+
+Key sensitivity equations:
+
+$$
+P_{\text{sens}} = -174 \text{ dBm/Hz} + NF + 10\log_{10}(B) + SNR_{\text{min}}
+$$ {#eq:sensitivity}
+</textarea>
+        </div>
+      </main>
+
+      <!-- Panel Divider 2 -->
+      <div class="resizer" id="resizer-prop"></div>
+
+      <!-- Area 4: Contextual Properties Panel -->
+      <aside id="panel-properties" class="panel resizable-panel">
+        <div class="panel-header">
+          <span>Properties</span>
+        </div>
+        <div class="panel-content properties-form">
+          <div class="prop-section">
+            <div class="prop-title">Section Layout</div>
+            <label>Orientation</label>
+            <div class="btn-group">
+              <button class="group-btn active" data-val="portrait">Portrait</button>
+              <button class="group-btn" data-val="landscape">Landscape</button>
+            </div>
+            
+            <label>Page Size</label>
+            <select id="prop-page-size" class="input-select">
+              <option value="A4">A4 (210 × 297 mm)</option>
+              <option value="A3">A3 (297 × 420 mm)</option>
+              <option value="Letter">Letter (8.5 × 11 in)</option>
+            </select>
+
+            <label>Columns</label>
+            <div class="btn-group">
+              <button class="group-btn active" data-val="1">1</button>
+              <button class="group-btn" data-val="2">2</button>
+              <button class="group-btn" data-val="3">3</button>
+            </div>
+
+            <label>Margins</label>
+            <input type="text" id="prop-margins" class="input-text" value="25mm">
+          </div>
+
+          <div class="prop-section">
+            <div class="prop-title">Active Element</div>
+            <div id="prop-active-desc" class="info-box">No element selected. Select a section or figure directive to edit parameters.</div>
+          </div>
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- Area 5: Document Preview (Collapsible) -->
+    <section id="panel-preview" class="preview-panel">
+      <div class="preview-header">
+        <span>Document Preview (Generated Page Representation)</span>
+        <div class="preview-controls">
+          <span class="preview-badge">HTML Preview (Fast)</span>
+          <button class="btn-sm" id="btn-toggle-preview">Collapse</button>
+        </div>
+      </div>
+      <div class="preview-body" id="preview-frame-container">
+        <div class="page-sheet portrait">
+          <div class="preview-page-header">ENG-RX-001 | Rev A</div>
+          <div class="preview-page-content">
+            <h1>1. System Overview</h1>
+            <p>The receiver architecture implements a dual-conversion heterodyne topology.</p>
+          </div>
+          <div class="preview-page-footer">Page 1</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Status Bar -->
+    <footer id="app-statusbar">
+      <div class="status-item"><span class="status-indicator ready"></span> Ready</div>
+      <div class="status-item" id="status-project">Project: ENG-RX-001 (Rev A)</div>
+      <div class="status-item" id="status-tools">Tools: Checking...</div>
+      <div class="status-item flex-end">DOCX: Ready | PDF: Ready</div>
+    </footer>
+
+  </div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
