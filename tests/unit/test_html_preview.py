@@ -42,3 +42,14 @@ async def test_generate_html_preview():
     assert "Introduction" in payload.html
     assert "preview-section-marker" in payload.html
     assert "preview-break-line" in payload.html
+
+
+@pytest.mark.asyncio
+async def test_generate_html_preview_rewrites_images():
+    doc = """# Diagram Test
+
+![Antenna Pattern](figures/antenna_pattern.svg)
+"""
+    payload = await HTMLPreviewGenerator.generate_preview(doc, session_id="test-session-123")
+    assert "/api/projects/test-session-123/assets/figures/antenna_pattern.svg" in payload.html
+

@@ -41,6 +41,11 @@ class ProjectSession:
         self.is_dirty: bool = False
         self.dirty_files: set[str] = set()
         self.last_saved_at: str | None = datetime.now(UTC).isoformat()
+        self.has_explicit_archive_path: bool = False
+        if self.archive_path:
+            tmp_root = str(Path(tempfile.gettempdir()).resolve())
+            if not str(self.archive_path).startswith(tmp_root):
+                self.has_explicit_archive_path = True
 
     def _resolve_safe_path(self, rel_path: str) -> Path:
         """Resolves a relative path within the session workspace, preventing path traversal."""
@@ -64,6 +69,24 @@ class ProjectSession:
             raise SecurityPathError(f"Cross-drive path traversal detected: {rel_path}") from e
 
         return target
+
+    def resolve_asset_file(self, rel_path: str) -> Path:
+        """Resolves an asset file within the workspace with fallback search paths."""
+        try:
+            target = self._resolve_safe_path(rel_path)
+            if target.is_file():
+                return target
+        except SecurityPathError:
+            pass
+
+        # Check common asset directories
+        clean_name = Path(rel_path).name
+        for cand_dir in ("figures", "assets/figures", "assets"):
+            cand = self.workspace_dir / cand_dir / clean_name
+            if cand.is_file():
+                return cand
+
+        raise ProjectArchiveError(f"Asset file not found in project workspace: {rel_path}")
 
     def get_tree(self) -> ResourceTreeResponse:
         """Constructs a categorical tree of all project assets and documents."""
@@ -279,6 +302,7 @@ class ProjectSession:
 
             os.replace(tmp_archive, dest_archive)
             self.archive_path = dest_archive
+            self.has_explicit_archive_path = True
             self.is_dirty = False
             self.dirty_files.clear()
             self.last_saved_at = datetime.now(UTC).isoformat()
@@ -295,6 +319,7 @@ class ProjectSession:
             document_number=self.manifest.document_number,
             revision=self.manifest.revision,
             archive_path=str(self.archive_path) if self.archive_path else "",
+            has_explicit_archive_path=self.has_explicit_archive_path,
             is_dirty=self.is_dirty,
             dirty_files=sorted(list(self.dirty_files)),
             last_saved_at=self.last_saved_at,

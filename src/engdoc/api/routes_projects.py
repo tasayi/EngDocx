@@ -36,10 +36,16 @@ class OpenProjectResponse(BaseModel):
     session_id: str
     manifest: ProjectManifest
     tree: ResourceTreeResponse
+    archive_path: str = ""
+    has_explicit_archive_path: bool = False
+
+class SaveProjectRequest(BaseModel):
+    output_path: str | None = None
 
 class SaveProjectResponse(BaseModel):
     success: bool
     archive_path: str
+    has_explicit_archive_path: bool = True
     saved_at: str
 
 @router.post("/new", response_model=CreateProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -87,6 +93,8 @@ async def open_existing_project(req: OpenProjectRequest) -> OpenProjectResponse:
             session_id=session.session_id,
             manifest=session.manifest,
             tree=tree,
+            archive_path=str(session.archive_path) if session.archive_path else "",
+            has_explicit_archive_path=session.has_explicit_archive_path,
         )
     except EngDocError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
@@ -128,6 +136,8 @@ async def upload_and_open_project(
             session_id=session.session_id,
             manifest=session.manifest,
             tree=tree,
+            archive_path="",
+            has_explicit_archive_path=False,
         )
     except EngDocError as e:
         if tmp_path.exists():
@@ -208,16 +218,69 @@ async def update_project_manifest(session_id: str, req: UpdateManifestRequest) -
     except EngDocError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
+@router.get("/{session_id}/assets/{asset_path:path}")
+async def get_project_asset(session_id: str, asset_path: str) -> FileResponse:
+    """Safely serves an asset (SVG, PNG, JPG, etc.) from the project workspace."""
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    try:
+        file_path = session.resolve_asset_file(asset_path)
+    except (SecurityPathError, ProjectArchiveError) as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    ext = file_path.suffix.lower()
+    if ext == ".svg":
+        media_type = "image/svg+xml"
+    elif ext == ".png":
+        media_type = "image/png"
+    elif ext in (".jpg", ".jpeg"):
+        media_type = "image/jpeg"
+    elif ext == ".gif":
+        media_type = "image/gif"
+    elif ext == ".webp":
+        media_type = "image/webp"
+    elif ext == ".pdf":
+        media_type = "application/pdf"
+    elif ext == ".emf":
+        svg_cand = file_path.with_suffix(".svg")
+        png_cand = file_path.with_suffix(".png")
+        if svg_cand.is_file():
+            file_path = svg_cand
+            media_type = "image/svg+xml"
+        elif png_cand.is_file():
+            file_path = png_cand
+            media_type = "image/png"
+        else:
+            media_type = "application/octet-stream"
+    else:
+        media_type = "application/octet-stream"
+
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
 @router.post("/{session_id}/save", response_model=SaveProjectResponse)
-async def save_project_to_archive(session_id: str, output_path: str | None = None) -> SaveProjectResponse:
+async def save_project_to_archive(
+    session_id: str,
+    req: SaveProjectRequest | None = None,
+    output_path: str | None = Query(None),
+) -> SaveProjectResponse:
     """Atomically commits all session modifications back to the .mdoc archive."""
     try:
         session = SessionManager.get_session(session_id)
-        dest = Path(output_path) if output_path else None
+        target_path = (req.output_path if req and req.output_path else None) or output_path
+        dest = Path(target_path) if target_path else None
         saved_archive = session.save(dest)
         return SaveProjectResponse(
             success=True,
             archive_path=str(saved_archive),
+            has_explicit_archive_path=session.has_explicit_archive_path,
             saved_at=session.last_saved_at or "",
         )
     except ProjectArchiveError as e:

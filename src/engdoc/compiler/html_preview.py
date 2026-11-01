@@ -90,17 +90,33 @@ class HTMLPreviewGenerator:
             body_text = m.group("body")
             caption = ""
             width = "80%"
+            source_val = ""
             for line in body_text.splitlines():
-                if line.strip().startswith("caption:"):
-                    caption = line.split(":", 1)[1].strip().strip("\"'")
-                elif line.strip().startswith("width:"):
-                    width = line.split(":", 1)[1].strip().strip("\"'")
+                line_s = line.strip()
+                if line_s.startswith("caption:"):
+                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("width:"):
+                    width = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("source:"):
+                    source_val = line_s.split(":", 1)[1].strip().strip("\"'")
 
             img_src = ""
             if workspace_dir and session_id:
                 reg = FigureRegistryManager.load_registry(workspace_dir)
                 if fig_id in reg.figures:
                     img_src = f"/api/figures/{session_id}/{fig_id}/preview"
+                elif source_val:
+                    img_src = f"/api/projects/{session_id}/assets/{source_val}"
+                else:
+                    for ext in (".svg", ".png", ".jpg", ".jpeg"):
+                        cand1 = workspace_dir / "figures" / f"{fig_id}{ext}"
+                        cand2 = workspace_dir / "assets" / "figures" / f"{fig_id}{ext}"
+                        if cand1.is_file():
+                            img_src = f"/api/projects/{session_id}/assets/figures/{fig_id}{ext}"
+                            break
+                        elif cand2.is_file():
+                            img_src = f"/api/projects/{session_id}/assets/assets/figures/{fig_id}{ext}"
+                            break
 
             if img_src:
                 img_tag = f'<img src="{img_src}" alt="{caption}" style="max-width: {width}; max-height: 400px; object-fit: contain;">'
@@ -150,6 +166,21 @@ class HTMLPreviewGenerator:
         finally:
             if tmp_in_path.exists():
                 tmp_in_path.unlink()
+
+        # 5. Rewrite any relative <img> paths to workspace assets endpoint
+        if session_id:
+            def rewrite_img_src(match: re.Match) -> str:
+                prefix = match.group(1)
+                src = match.group(2)
+                suffix = match.group(3)
+                if not src.startswith(("http://", "https://", "data:", "/api/")):
+                    clean_src = src.lstrip("./")
+                    return f"{prefix}/api/projects/{session_id}/assets/{clean_src}{suffix}"
+                return match.group(0)
+
+            html_out = re.sub(
+                r'(<img\s+[^>]*?src=["\'])([^"\']+)(["\'])', rewrite_img_src, html_out
+            )
 
         headings_count = len(re.findall(r"^#{1,6}\s+", content, flags=re.MULTILINE))
         equations_count = len(

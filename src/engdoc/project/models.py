@@ -125,6 +125,7 @@ class SessionStatusResponse(BaseModel):
     document_number: str
     revision: str
     archive_path: str
+    has_explicit_archive_path: bool = False
     is_dirty: bool
     dirty_files: list[str]
     last_saved_at: str | None

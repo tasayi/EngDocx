@@ -17,12 +17,16 @@ class ProjectState {
     this.openTabs = new Map(); // path -> { path, name, isDirty, content }
     this.isProjectDirty = false;
     this.autoSaveTimer = null;
+    this.archivePath = '';
+    this.hasExplicitPath = false;
   }
 
-  async setSession(sessionId, manifest, tree) {
+  async setSession(sessionId, manifest, tree, archivePath = '', hasExplicitPath = false) {
     this.sessionId = sessionId;
     this.manifest = manifest;
     this.tree = tree;
+    this.archivePath = archivePath || '';
+    this.hasExplicitPath = hasExplicitPath || false;
     this.isProjectDirty = false;
     this.openTabs.clear();
 
@@ -268,18 +272,38 @@ class ProjectState {
     }
   }
 
-  async saveProjectArchive() {
+  async saveProjectArchive(destinationPath = null) {
     if (!this.sessionId) return;
     await this.saveCurrentDocument();
 
+    if (!destinationPath && !this.hasExplicitPath) {
+      // Prompt user with Save As dialog
+      const modalSave = document.getElementById('modal-save-project');
+      const inputSave = document.getElementById('modal-save-path-input');
+      if (modalSave && inputSave) {
+        const defaultName = `${this.manifest?.document_number || 'ENG-DOC'}_${(this.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
+        inputSave.value = this.archivePath || defaultName;
+        modalSave.style.display = 'flex';
+        inputSave.focus();
+        return;
+      }
+    }
+
     try {
+      const body = destinationPath ? JSON.stringify({ output_path: destinationPath }) : undefined;
+      const headers = body ? { 'Content-Type': 'application/json' } : undefined;
       const res = await fetch(`/api/projects/${this.sessionId}/save`, {
         method: 'POST',
+        headers: headers,
+        body: body,
       });
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
+      this.archivePath = data.archive_path;
+      this.hasExplicitPath = true;
       this.isProjectDirty = false;
       this.updateStatus();
 
@@ -290,17 +314,18 @@ class ProjectState {
 
       const statusText = document.getElementById('status-text');
       if (statusText) {
-        statusText.textContent = `Project saved to: ${data.archive_path}`;
+        statusText.textContent = `Project saved: ${data.archive_path}`;
         setTimeout(() => {
           if (statusText.textContent.startsWith('Project saved')) {
             statusText.textContent = 'Ready';
           }
         }, 5000);
       }
-      alert(`Project successfully saved to disk:\n${data.archive_path}`);
+      return data;
     } catch (err) {
       console.error('Project archive save failed:', err);
       alert(`Save failed: ${err.message}`);
+      throw err;
     }
   }
 
@@ -386,7 +411,7 @@ export function initProjectManager() {
 
         const treeRes = await fetch(`/api/projects/${created.session_id}/tree`);
         const tree = await treeRes.json();
-        await projectState.setSession(created.session_id, created.manifest, tree);
+        await projectState.setSession(created.session_id, created.manifest, tree, created.project_path, true);
       } catch (err) {
         alert(`Failed to create project: ${err.message}`);
       }
@@ -435,7 +460,7 @@ export function initProjectManager() {
         }
         const opened = await res.json();
         closeOpenModal();
-        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree, '', false);
       } catch (err) {
         alert(`Failed to open uploaded project: ${err.message}`);
       } finally {
@@ -463,7 +488,7 @@ export function initProjectManager() {
         }
         const opened = await res.json();
         closeOpenModal();
-        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree, opened.archive_path || path, true);
       } catch (err) {
         alert(`Failed to open project: ${err.message}`);
       }
@@ -483,7 +508,7 @@ export function initProjectManager() {
         }
         const opened = await res.json();
         closeOpenModal();
-        await projectState.setSession(opened.session_id, opened.manifest, opened.tree);
+        await projectState.setSession(opened.session_id, opened.manifest, opened.tree, 'examples/satellite_thermal_spec.mdoc', true);
       } catch (err) {
         alert(`Failed to open sample: ${err.message}`);
       }
@@ -644,11 +669,36 @@ export function initProjectManager() {
     modalTplBottomClose?.addEventListener('click', () => (modalTemplates.style.display = 'none'));
   }
 
-  // Save Project Trigger (Button & Ctrl+S)
+  // Save & Save As Controls
   const btnSave = document.getElementById('btn-save');
+  const btnSaveAs = document.getElementById('btn-save-as');
+  const modalSave = document.getElementById('modal-save-project');
+  const modalSaveClose = document.getElementById('modal-save-close-btn');
+  const modalSaveCancel = document.getElementById('modal-save-cancel-btn');
+  const modalSaveSubmit = document.getElementById('modal-save-submit-btn');
+  const modalSaveDownload = document.getElementById('modal-save-download-btn');
+  const modalSaveInput = document.getElementById('modal-save-path-input');
+  const modalSaveStatus = document.getElementById('modal-save-status');
+
+  const openSaveAsModal = () => {
+    if (!projectState.sessionId) {
+      alert('Please create or open a project first.');
+      return;
+    }
+    if (modalSave && modalSaveInput) {
+      const defaultName = `${projectState.manifest?.document_number || 'ENG-DOC'}_${(projectState.manifest?.project_name || 'Project').replace(/\s+/g, '_')}.mdoc`;
+      modalSaveInput.value = projectState.archivePath || defaultName;
+      if (modalSaveStatus) modalSaveStatus.textContent = '';
+      modalSave.style.display = 'flex';
+      modalSaveInput.focus();
+    }
+  };
+
   btnSave?.addEventListener('click', () => {
     projectState.saveProjectArchive();
   });
+
+  btnSaveAs?.addEventListener('click', openSaveAsModal);
 
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -657,16 +707,82 @@ export function initProjectManager() {
     }
   });
 
-  // Download .mdoc Trigger (One-click direct browser download)
-  const btnDownloadMdoc = document.getElementById('btn-download-mdoc');
-  btnDownloadMdoc?.addEventListener('click', async () => {
-    if (!projectState.sessionId) {
-      alert('Please create or open a project first.');
+  const closeSaveModal = () => {
+    if (modalSave) modalSave.style.display = 'none';
+  };
+  modalSaveClose?.addEventListener('click', closeSaveModal);
+  modalSaveCancel?.addEventListener('click', closeSaveModal);
+
+  modalSaveSubmit?.addEventListener('click', async () => {
+    const customPath = modalSaveInput?.value.trim();
+    if (!customPath) {
+      alert('Please enter a destination path.');
       return;
     }
+    if (modalSaveStatus) modalSaveStatus.textContent = 'Saving archive...';
+    try {
+      await projectState.saveProjectArchive(customPath);
+      closeSaveModal();
+    } catch (err) {
+      if (modalSaveStatus) modalSaveStatus.textContent = `Save failed: ${err.message}`;
+    }
+  });
+
+  modalSaveDownload?.addEventListener('click', async () => {
+    if (!projectState.sessionId) return;
     await projectState.saveCurrentDocument();
     window.location.href = `/api/projects/${projectState.sessionId}/download`;
+    closeSaveModal();
   });
+
+  // 1-Click Quick Build DOCX
+  const btnBuild = document.getElementById('btn-build');
+  if (btnBuild) {
+    btnBuild.addEventListener('click', async () => {
+      if (!projectState.sessionId) {
+        alert('Please create or open a project first.');
+        return;
+      }
+      await projectState.saveCurrentDocument();
+      btnBuild.disabled = true;
+      const originalText = btnBuild.textContent;
+      btnBuild.textContent = '⏳ Building...';
+
+      const statusText = document.getElementById('status-text');
+      if (statusText) statusText.textContent = 'Compiling DOCX...';
+
+      try {
+        const res = await fetch('/api/compile/docx', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: projectState.sessionId }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (statusText) {
+          statusText.innerHTML = `✅ Built ${data.filename} (${data.duration_seconds}s) – <a href="${data.download_url}" download="${data.filename}" style="color: var(--accent-color); text-decoration: underline;">Download DOCX</a>`;
+        }
+
+        // Trigger direct download
+        const dlLink = document.createElement('a');
+        dlLink.href = data.download_url;
+        dlLink.download = data.filename;
+        document.body.appendChild(dlLink);
+        dlLink.click();
+        document.body.removeChild(dlLink);
+      } catch (err) {
+        console.error('Quick build failed:', err);
+        alert(`Build failed: ${err.message}`);
+        if (statusText) statusText.textContent = `Build failed: ${err.message}`;
+      } finally {
+        btnBuild.disabled = false;
+        btnBuild.textContent = originalText;
+      }
+    });
+  }
 
   // New File Modal
   const btnNewFile = document.getElementById('btn-new-file');
@@ -703,9 +819,8 @@ export function initProjectManager() {
     });
   }
 
-  // Publish Modal
+  // Publish Modal (Comprehensive Multi-Format Publishing)
   const btnPublishMenu = document.getElementById('btn-menu-publish');
-  const btnBuild = document.getElementById('btn-build');
   const modalPublish = document.getElementById('modal-publish');
   const modalPubClose = document.getElementById('modal-pub-close-btn');
   const modalPubCancel = document.getElementById('modal-pub-cancel-btn');
@@ -725,7 +840,6 @@ export function initProjectManager() {
     };
 
     btnPublishMenu?.addEventListener('click', openPublishModal);
-    btnBuild?.addEventListener('click', openPublishModal);
 
     const closePubModal = () => (modalPublish.style.display = 'none');
     modalPubClose?.addEventListener('click', closePubModal);

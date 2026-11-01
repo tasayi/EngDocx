@@ -202,3 +202,42 @@ async def test_upload_and_download_project_api(async_client: AsyncClient, tmp_pa
     assert tree_res.status_code == 200
     assert tree_res.json()["project_name"] == "Upload Download Test"
 
+
+@pytest.mark.asyncio
+async def test_project_assets_serving_and_save_as(async_client: AsyncClient, tmp_path: Path):
+    # 1. Open sample project
+    open_res = await async_client.post(
+        "/api/projects/open",
+        json={"archive_path": "examples/satellite_thermal_spec.mdoc"},
+    )
+    assert open_res.status_code == 200
+    session_id = open_res.json()["session_id"]
+
+    # 2. Serve asset via full relative path
+    asset_res = await async_client.get(
+        f"/api/projects/{session_id}/assets/figures/sensor_array.svg"
+    )
+    assert asset_res.status_code == 200
+    assert asset_res.headers["content-type"].startswith("image/svg+xml")
+    assert len(asset_res.content) > 0
+
+    # 3. Serve asset via filename-only fallback
+    asset_fallback_res = await async_client.get(
+        f"/api/projects/{session_id}/assets/sensor_array.svg"
+    )
+    assert asset_fallback_res.status_code == 200
+    assert asset_fallback_res.headers["content-type"].startswith("image/svg+xml")
+
+    # 4. Save As with custom destination
+    save_as_path = str(tmp_path / "new_destination.mdoc")
+    save_res = await async_client.post(
+        f"/api/projects/{session_id}/save",
+        json={"output_path": save_as_path},
+    )
+    assert save_res.status_code == 200
+    save_data = save_res.json()
+    assert save_data["has_explicit_archive_path"] is True
+    assert save_data["archive_path"] == save_as_path
+    assert Path(save_as_path).is_file()
+
+
