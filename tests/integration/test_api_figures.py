@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
+from lxml import etree
 
 from engdoc.project.session import SessionManager
 
@@ -92,6 +93,19 @@ async def test_figure_lifecycle_and_docx_embedding(async_client: AsyncClient, tm
     with zipfile.ZipFile(docx_file, "r") as zf:
         media_files = [f for f in zf.namelist() if f.startswith("word/media/")]
         assert len(media_files) >= 1, f"Expected embedded media, found: {zf.namelist()}"
+
+        # Verify Word OpenXML figure centering and caption bold formatting
+        doc_xml = zf.read("word/document.xml")
+        root = etree.fromstring(doc_xml)
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        drawing_p = root.xpath("//w:p[.//w:drawing]", namespaces=ns)[0]
+        assert drawing_p.xpath("./w:pPr/w:jc/@w:val", namespaces=ns) == ["center"]
+        assert len(drawing_p.xpath("./w:pPr/w:keepNext", namespaces=ns)) == 1
+
+        caption_p = root.xpath("//w:p[.//w:pStyle[@w:val='Caption']]", namespaces=ns)[0]
+        assert caption_p.xpath("./w:pPr/w:jc/@w:val", namespaces=ns) == ["center"]
+        bold_runs = caption_p.xpath(".//w:r[w:rPr/w:b]/w:t/text()", namespaces=ns)
+        assert any("Figure FIG-001" in t for t in bold_runs)
 
     # 7. Modify the source SVG and recompile without manual image replacement
     source_svg = session.workspace_dir / "assets" / "figures" / "antenna.svg"

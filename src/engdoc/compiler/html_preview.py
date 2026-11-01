@@ -9,6 +9,7 @@ from typing import Any
 
 from engdoc.compiler.runner import PandocRunner
 from engdoc.figures.registry import FigureRegistryManager
+from engdoc.figures.service import format_figure_caption
 from engdoc.markup.parser import EMDParser
 
 
@@ -88,17 +89,19 @@ class HTMLPreviewGenerator:
         def figure_preview_repl(m: re.Match) -> str:
             fig_id = m.group("id") or "FIG"
             body_text = m.group("body")
-            caption = ""
+            caption_raw = ""
             width = "80%"
             source_val = ""
             for line in body_text.splitlines():
                 line_s = line.strip()
                 if line_s.startswith("caption:"):
-                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                    caption_raw = line_s.split(":", 1)[1].strip().strip("\"'")
                 elif line_s.startswith("width:"):
                     width = line_s.split(":", 1)[1].strip().strip("\"'")
                 elif line_s.startswith("source:"):
                     source_val = line_s.split(":", 1)[1].strip().strip("\"'")
+
+            full_caption, label, desc = format_figure_caption(fig_id, caption_raw)
 
             img_src = ""
             if workspace_dir and session_id:
@@ -119,14 +122,19 @@ class HTMLPreviewGenerator:
                             break
 
             if img_src:
-                img_tag = f'<img src="{img_src}" alt="{caption}" style="max-width: {width}; max-height: 400px; object-fit: contain;">'
+                img_tag = f'<img src="{img_src}" alt="{full_caption}" style="max-width: {width}; max-height: 400px; object-fit: contain;">'
             else:
-                img_tag = f'<div class="figure-placeholder"><span>📊 Figure {fig_id}</span></div>'
+                img_tag = f'<div class="figure-placeholder"><span>📊 {label}</span></div>'
+
+            if desc:
+                caption_html = f"<figcaption><strong>{label}</strong>: {desc}</figcaption>"
+            else:
+                caption_html = f"<figcaption><strong>{label}</strong></figcaption>"
 
             return (
                 f'\n<figure class="preview-figure" id="fig-{fig_id}">'
                 f"{img_tag}"
-                f"<figcaption><strong>Figure {fig_id}</strong>: {caption}</figcaption>"
+                f"{caption_html}"
                 f"</figure>\n"
             )
 

@@ -1,10 +1,45 @@
 """Figure Resolution and Integration Service."""
 
+import re
 from pathlib import Path
 from typing import Any
 
 from engdoc.figures.converter import FigureConverter
 from engdoc.figures.registry import FigureMetadata, FigureRegistryManager
+
+
+def format_figure_caption(fig_id: str, raw_caption: str | None) -> tuple[str, str, str]:
+    """Formats a figure caption into (full_caption, label, description).
+
+    - full_caption: e.g. 'Figure FIG-001: System Diagram' (or 'Figure 1: System Diagram')
+    - label: e.g. 'Figure FIG-001' (or 'Figure 1')
+    - description: e.g. 'System Diagram'
+    """
+    raw = (raw_caption or "").strip()
+    if not raw:
+        label = f"Figure {fig_id}"
+        return (label, label, "")
+
+    if raw.lower().startswith("figure"):
+        after_fig = raw[6:].strip()
+        # 1. Match 'Figure <num/id>[:.-] <desc>'
+        m_sep = re.match(r"^([A-Za-z0-9_\-\.]+)\s*[:\.\-]\s*(.*)$", after_fig)
+        if m_sep:
+            label_id = m_sep.group(1)
+            desc = m_sep.group(2).strip()
+            label = f"Figure {label_id}"
+            full = f"{label}: {desc}" if desc else label
+            return (full, label, desc)
+
+        # 2. Match 'Figure <num/id>' (no description, but actual number/code like 'Figure 1' or 'Figure FIG-001')
+        if re.match(r"^(\d+[\w\.\-]*|[A-Z0-9_\-]+)$", after_fig) and any(c.isdigit() for c in after_fig):
+            label = f"Figure {after_fig}"
+            return (label, label, "")
+
+    # Standard description passed, e.g. "System Architecture Diagram" or placeholder "Figure description"
+    label = f"Figure {fig_id}"
+    full = f"{label}: {raw}"
+    return (full, label, raw)
 
 
 class FigureService:
@@ -48,9 +83,10 @@ class FigureService:
         rel_compiled = str(compiled_path.relative_to(workspace_dir)).replace("\\", "/")
 
         # Directives parameter overrides
-        caption = params.get("caption") or fig.caption or f"Figure {fig_id}"
-        width = params.get("width") or fig.width or "16cm"
+        caption_raw = params.get("caption") or (fig.caption if fig else "") or ""
+        full_caption, _, _ = format_figure_caption(fig_id, caption_raw)
+        width = params.get("width") or (fig.width if fig else "") or "16cm"
 
         # Emits Pandoc image with crossref ID and width attribute
-        return f"\n![{caption}]({rel_compiled}){{#fig:{fig_id} width={width}}}\n"
+        return f"\n![{full_caption}]({rel_compiled}){{#fig:{fig_id} width={width}}}\n"
 
