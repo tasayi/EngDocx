@@ -9,10 +9,12 @@ from pathlib import Path
 
 from lxml import etree
 
-from engdoc.compiler.layout import NSMAP, W_NS, SectionLayout
+from engdoc.compiler.layout import W_NS, SectionLayout
 
 MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
+WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+NSMAP = {"w": W_NS, "wp": WP_NS}
 CAPTION_PREFIX_RE = re.compile(
     r"^(Figure(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE,
@@ -77,8 +79,21 @@ class DocxPostprocessor:
             pPr.append(c)
 
     @classmethod
+    def _ensure_font_size(cls, rPr: etree.Element, sz_val: str = "20") -> None:
+        """Sets sz and szCs in rPr to enforce font size (20 = 10pt)."""
+        sz = rPr.find(f"{{{W_NS}}}sz")
+        if sz is None:
+            sz = etree.SubElement(rPr, f"{{{W_NS}}}sz")
+        sz.set(f"{{{W_NS}}}val", sz_val)
+
+        sz_cs = rPr.find(f"{{{W_NS}}}szCs")
+        if sz_cs is None:
+            sz_cs = etree.SubElement(rPr, f"{{{W_NS}}}szCs")
+        sz_cs.set(f"{{{W_NS}}}val", sz_val)
+
+    @classmethod
     def _format_caption_runs(cls, p: etree.Element) -> None:
-        """Formats the caption paragraph runs so that 'Figure <ID>: ' is bolded."""
+        """Formats the caption paragraph runs so that 'Figure <ID>: ' is bolded and 10pt font is set."""
         text_nodes = p.xpath(".//w:t", namespaces=NSMAP)
         full_text = "".join(t.text or "" for t in text_nodes)
         m = CAPTION_PREFIX_RE.match(full_text)
@@ -106,12 +121,16 @@ class DocxPostprocessor:
                 rPr.append(etree.Element(f"{{{W_NS}}}b"))
             if rPr.find(f"{{{W_NS}}}bCs") is None:
                 rPr.append(etree.Element(f"{{{W_NS}}}bCs"))
+            cls._ensure_font_size(rPr, "20")
+
             first_t.text = prefix
             first_t.set(f"{{{XML_NS}}}space", "preserve")
 
             if remainder:
                 idx = p.index(first_r)
                 rem_r = etree.Element(f"{{{W_NS}}}r")
+                rem_rPr = etree.SubElement(rem_r, f"{{{W_NS}}}rPr")
+                cls._ensure_font_size(rem_rPr, "20")
                 rem_t = etree.SubElement(rem_r, f"{{{W_NS}}}t")
                 rem_t.set(f"{{{XML_NS}}}space", "preserve")
                 rem_t.text = remainder
@@ -124,15 +143,26 @@ class DocxPostprocessor:
             rPr_prefix = etree.SubElement(r_prefix, f"{{{W_NS}}}rPr")
             etree.SubElement(rPr_prefix, f"{{{W_NS}}}b")
             etree.SubElement(rPr_prefix, f"{{{W_NS}}}bCs")
+            cls._ensure_font_size(rPr_prefix, "20")
             t_prefix = etree.SubElement(r_prefix, f"{{{W_NS}}}t")
             t_prefix.set(f"{{{XML_NS}}}space", "preserve")
             t_prefix.text = prefix
 
             if remainder:
                 r_rem = etree.SubElement(p, f"{{{W_NS}}}r")
+                rPr_rem = etree.SubElement(r_rem, f"{{{W_NS}}}rPr")
+                cls._ensure_font_size(rPr_rem, "20")
                 t_rem = etree.SubElement(r_rem, f"{{{W_NS}}}t")
                 t_rem.set(f"{{{XML_NS}}}space", "preserve")
                 t_rem.text = remainder
+
+        # Ensure all runs in p strictly have 10pt size (20 half-points)
+        for r in p.findall(f"{{{W_NS}}}r"):
+            rPr = r.find(f"{{{W_NS}}}rPr")
+            if rPr is None:
+                rPr = etree.Element(f"{{{W_NS}}}rPr")
+                r.insert(0, rPr)
+            cls._ensure_font_size(rPr, "20")
 
     @classmethod
     def process(
@@ -192,11 +222,25 @@ class DocxPostprocessor:
                     pPr = etree.Element(f"{{{W_NS}}}pPr")
                     p.insert(0, pPr)
 
-                # Horizontal centering on drawing
+                # Determine figure alignment from wp:docPr title attribute if present
+                alignment = "center"
+                doc_pr_elems = p.xpath(".//wp:docPr", namespaces=NSMAP)
+                if doc_pr_elems:
+                    title = doc_pr_elems[0].get("title", "")
+                    if "align:left" in title:
+                        alignment = "left"
+                    elif "align:right" in title:
+                        alignment = "right"
+                    elif "align:center" in title:
+                        alignment = "center"
+                    if title.startswith("align:"):
+                        doc_pr_elems[0].set("title", "")
+
+                # Horizontal alignment on drawing paragraph
                 jc = pPr.find(f"{{{W_NS}}}jc")
                 if jc is None:
                     jc = etree.SubElement(pPr, f"{{{W_NS}}}jc")
-                jc.set(f"{{{W_NS}}}val", "center")
+                jc.set(f"{{{W_NS}}}val", alignment)
 
                 # Keep image on same page as following caption
                 if pPr.find(f"{{{W_NS}}}keepNext") is None:
@@ -233,11 +277,11 @@ class DocxPostprocessor:
                             pStyle = etree.SubElement(next_pPr, f"{{{W_NS}}}pStyle")
                         pStyle.set(f"{{{W_NS}}}val", "Caption")
 
-                        # Center caption
+                        # Align caption to match figure alignment
                         next_jc = next_pPr.find(f"{{{W_NS}}}jc")
                         if next_jc is None:
                             next_jc = etree.SubElement(next_pPr, f"{{{W_NS}}}jc")
-                        next_jc.set(f"{{{W_NS}}}val", "center")
+                        next_jc.set(f"{{{W_NS}}}val", alignment)
 
                         # Standard caption spacing: 60 dxa before, 180 dxa after
                         spacing = next_pPr.find(f"{{{W_NS}}}spacing")
@@ -245,6 +289,13 @@ class DocxPostprocessor:
                             spacing = etree.SubElement(next_pPr, f"{{{W_NS}}}spacing")
                         spacing.set(f"{{{W_NS}}}before", "60")
                         spacing.set(f"{{{W_NS}}}after", "180")
+
+                        # 10pt font size on paragraph default
+                        pPr_rPr = next_pPr.find(f"{{{W_NS}}}rPr")
+                        if pPr_rPr is None:
+                            pPr_rPr = etree.Element(f"{{{W_NS}}}rPr")
+                            next_pPr.append(pPr_rPr)
+                        cls._ensure_font_size(pPr_rPr, "20")
 
                         cls._sort_pPr(next_pPr)
                         cls._format_caption_runs(next_p)

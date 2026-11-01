@@ -37,7 +37,7 @@ export function initEditor({ onDocChange } = {}) {
 
   if (btnFigure) {
     btnFigure.addEventListener('click', () => {
-      insertSnippet('\n@figure FIG-001\n  width: 16cm\n  alignment: center\n  caption: Figure description\n@end\n');
+      insertSnippet('\n@figure FIG-001\n  width: 16cm\n  height: auto\n  alignment: center\n  caption: Figure description\n@end\n');
     });
   }
 

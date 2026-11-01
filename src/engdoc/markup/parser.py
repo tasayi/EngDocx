@@ -188,10 +188,14 @@ class EMDParser:
         )
 
         # 5. Transform @figure blocks into markdown figures or Pandoc Divs
+        fig_counter = 0
+
         def figure_repl(m: re.Match) -> str:
-            fig_id = m.group("id") or "FIG"
+            nonlocal fig_counter
+            fig_counter += 1
+            fig_id = m.group("id") or f"FIG-{fig_counter:03d}"
             body_text = m.group("body")
-            params: dict[str, Any] = {}
+            params: dict[str, Any] = {"seq_number": fig_counter}
             for line in body_text.splitlines():
                 line = line.strip()
                 if ":" in line:
@@ -205,7 +209,7 @@ class EMDParser:
             width = params.get("width", "16cm")
             return (
                 f'\n::: {{.figure id="{fig_id}" width="{width}"}}\n'
-                f"**Figure {fig_id}**: {caption}\n"
+                f"**Figure {fig_counter}**: {caption}\n"
                 f":::\n"
             )
 

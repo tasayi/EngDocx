@@ -8,16 +8,22 @@ from engdoc.figures.converter import FigureConverter
 from engdoc.figures.registry import FigureMetadata, FigureRegistryManager
 
 
-def format_figure_caption(fig_id: str, raw_caption: str | None) -> tuple[str, str, str]:
+def format_figure_caption(
+    fig_id: str,
+    raw_caption: str | None,
+    seq_number: int | None = None,
+) -> tuple[str, str, str]:
     """Formats a figure caption into (full_caption, label, description).
 
-    - full_caption: e.g. 'Figure FIG-001: System Diagram' (or 'Figure 1: System Diagram')
-    - label: e.g. 'Figure FIG-001' (or 'Figure 1')
+    - full_caption: e.g. 'Figure 1: System Diagram' (or 'Figure FIG-001: System Diagram')
+    - label: e.g. 'Figure 1' (or 'Figure FIG-001')
     - description: e.g. 'System Diagram'
     """
     raw = (raw_caption or "").strip()
+    default_num = str(seq_number) if seq_number is not None else fig_id
+
     if not raw:
-        label = f"Figure {fig_id}"
+        label = f"Figure {default_num}"
         return (label, label, "")
 
     if raw.lower().startswith("figure"):
@@ -37,7 +43,7 @@ def format_figure_caption(fig_id: str, raw_caption: str | None) -> tuple[str, st
             return (label, label, "")
 
     # Standard description passed, e.g. "System Architecture Diagram" or placeholder "Figure description"
-    label = f"Figure {fig_id}"
+    label = f"Figure {default_num}"
     full = f"{label}: {raw}"
     return (full, label, raw)
 
@@ -84,9 +90,20 @@ class FigureService:
 
         # Directives parameter overrides
         caption_raw = params.get("caption") or (fig.caption if fig else "") or ""
-        full_caption, _, _ = format_figure_caption(fig_id, caption_raw)
-        width = params.get("width") or (fig.width if fig else "") or "16cm"
+        seq_num = params.get("seq_number")
+        full_caption, _, _ = format_figure_caption(fig_id, caption_raw, seq_number=seq_num)
 
-        # Emits Pandoc image with crossref ID and width attribute
-        return f"\n![{full_caption}]({rel_compiled}){{#fig:{fig_id} width={width}}}\n"
+        width = params.get("width") or (fig.width if fig else "") or "16cm"
+        height = params.get("height") or (fig.height if fig else "") or ""
+        alignment = params.get("alignment") or (fig.alignment if fig else "") or "center"
+        if alignment not in ("left", "center", "right"):
+            alignment = "center"
+
+        dim_parts = [f"width={width}"]
+        if height and height.lower() != "auto":
+            dim_parts.append(f"height={height}")
+        dim_str = " ".join(dim_parts)
+
+        # Emits Pandoc image with crossref ID, alignment in title, and dimension attributes
+        return f'\n![{full_caption}]({rel_compiled} "align:{alignment}"){{#fig:{fig_id} {dim_str}}}\n'
 

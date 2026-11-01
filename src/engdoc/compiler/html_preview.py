@@ -86,11 +86,17 @@ class HTMLPreviewGenerator:
         )
 
         # 3. Resolve figures for preview
+        fig_counter = 0
+
         def figure_preview_repl(m: re.Match) -> str:
-            fig_id = m.group("id") or "FIG"
+            nonlocal fig_counter
+            fig_counter += 1
+            fig_id = m.group("id") or f"FIG-{fig_counter:03d}"
             body_text = m.group("body")
             caption_raw = ""
             width = "80%"
+            height = "auto"
+            alignment = "center"
             source_val = ""
             for line in body_text.splitlines():
                 line_s = line.strip()
@@ -98,10 +104,19 @@ class HTMLPreviewGenerator:
                     caption_raw = line_s.split(":", 1)[1].strip().strip("\"'")
                 elif line_s.startswith("width:"):
                     width = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("height:"):
+                    height = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("alignment:"):
+                    alignment = line_s.split(":", 1)[1].strip().lower().strip("\"'")
                 elif line_s.startswith("source:"):
                     source_val = line_s.split(":", 1)[1].strip().strip("\"'")
 
-            full_caption, label, desc = format_figure_caption(fig_id, caption_raw)
+            if alignment not in ("left", "center", "right"):
+                alignment = "center"
+
+            full_caption, label, desc = format_figure_caption(
+                fig_id, caption_raw, seq_number=fig_counter
+            )
 
             img_src = ""
             if workspace_dir and session_id:
@@ -121,10 +136,17 @@ class HTMLPreviewGenerator:
                             img_src = f"/api/projects/{session_id}/assets/assets/figures/{fig_id}{ext}"
                             break
 
-            if img_src:
-                img_tag = f'<img src="{img_src}" alt="{full_caption}" style="max-width: {width}; max-height: 400px; object-fit: contain;">'
+            img_style = f"max-width: {width};"
+            if height and height.lower() != "auto":
+                img_style += f" height: {height};"
             else:
-                img_tag = f'<div class="figure-placeholder"><span>📊 {label}</span></div>'
+                img_style += " max-height: 400px;"
+            img_style += " object-fit: contain; display: inline-block;"
+
+            if img_src:
+                img_tag = f'<img src="{img_src}" alt="{full_caption}" style="{img_style}">'
+            else:
+                img_tag = f'<div class="figure-placeholder" style="{img_style}"><span>📊 {label}</span></div>'
 
             if desc:
                 caption_html = f"<figcaption><strong>{label}</strong>: {desc}</figcaption>"
@@ -132,7 +154,7 @@ class HTMLPreviewGenerator:
                 caption_html = f"<figcaption><strong>{label}</strong></figcaption>"
 
             return (
-                f'\n<figure class="preview-figure" id="fig-{fig_id}">'
+                f'\n<figure class="preview-figure align-{alignment}" id="fig-{fig_id}" style="text-align: {alignment};">'
                 f"{img_tag}"
                 f"{caption_html}"
                 f"</figure>\n"

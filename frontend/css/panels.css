@@ -271,6 +271,18 @@
   text-align: center;
 }
 
+.preview-figure.align-left {
+  text-align: left;
+}
+
+.preview-figure.align-center {
+  text-align: center;
+}
+
+.preview-figure.align-right {
+  text-align: right;
+}
+
 .preview-figure img {
   max-width: 100%;
   max-height: 350px;
@@ -282,10 +294,11 @@
 }
 
 .preview-figure figcaption {
-  font-size: 11px;
+  font-size: 10pt;
   color: #475569;
   margin-top: 6px;
   font-style: italic;
+  line-height: 1.4;
 }
 
 .page-sheet.columns-2 .preview-page-content {

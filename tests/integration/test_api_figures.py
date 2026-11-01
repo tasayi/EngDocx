@@ -105,7 +105,8 @@ async def test_figure_lifecycle_and_docx_embedding(async_client: AsyncClient, tm
         caption_p = root.xpath("//w:p[.//w:pStyle[@w:val='Caption']]", namespaces=ns)[0]
         assert caption_p.xpath("./w:pPr/w:jc/@w:val", namespaces=ns) == ["center"]
         bold_runs = caption_p.xpath(".//w:r[w:rPr/w:b]/w:t/text()", namespaces=ns)
-        assert any("Figure FIG-001" in t for t in bold_runs)
+        assert any("Figure 1" in t for t in bold_runs)
+        assert caption_p.xpath(".//w:rPr/w:sz/@w:val", namespaces=ns)[0] == "20"
 
     # 7. Modify the source SVG and recompile without manual image replacement
     source_svg = session.workspace_dir / "assets" / "figures" / "antenna.svg"

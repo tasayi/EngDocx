@@ -4,6 +4,27 @@
 
 import { insertSnippet } from './editor.js';
 
+let activeFigureId = "FIG-001";
+let currentFigAlignment = "center";
+
+export function setActiveFigureProperties(fig) {
+  if (!fig) return;
+  activeFigureId = fig.id || "FIG-001";
+  const figWidthInput = document.getElementById('prop-fig-width');
+  const figHeightInput = document.getElementById('prop-fig-height');
+  const figAlignBtns = document.querySelectorAll('#group-figure-alignment .group-btn');
+
+  if (figWidthInput && fig.width) figWidthInput.value = fig.width;
+  if (figHeightInput) figHeightInput.value = fig.height || 'auto';
+  if (fig.alignment) {
+    currentFigAlignment = fig.alignment;
+    figAlignBtns.forEach((b) => {
+      if (b.dataset.val === fig.alignment) b.classList.add('active');
+      else b.classList.remove('active');
+    });
+  }
+}
+
 export function initPropertiesPanel() {
   const panelProp = document.getElementById('panel-properties');
   const resizerProp = document.getElementById('resizer-prop');
@@ -77,4 +98,25 @@ export function initPropertiesPanel() {
     const snippet = `\n@section\n  orientation: ${currentOrientation}\n  page: ${pageVal}\n  columns: ${currentColumns}\n  margin: ${marginVal}\n@end\n`;
     insertSnippet(snippet);
   }
+
+  // Figure Properties Controls
+  const figAlignBtns = document.querySelectorAll('#group-figure-alignment .group-btn');
+  const figWidthInput = document.getElementById('prop-fig-width');
+  const figHeightInput = document.getElementById('prop-fig-height');
+  const btnInsertFigProp = document.getElementById('btn-insert-figure-prop');
+
+  figAlignBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      figAlignBtns.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentFigAlignment = btn.dataset.val;
+    });
+  });
+
+  btnInsertFigProp?.addEventListener('click', () => {
+    const widthVal = figWidthInput ? figWidthInput.value.trim() : '16cm';
+    const heightVal = figHeightInput ? figHeightInput.value.trim() : 'auto';
+    const snippet = `\n@figure ${activeFigureId}\n  width: ${widthVal || '16cm'}\n  height: ${heightVal || 'auto'}\n  alignment: ${currentFigAlignment}\n  caption: Figure description\n@end\n`;
+    insertSnippet(snippet);
+  });
 }

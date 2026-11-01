@@ -2,6 +2,8 @@
  * Figure Management & Asset Gallery Frontend Module
  */
 
+import { setActiveFigureProperties } from './properties.js';
+
 export class FigureManagerUI {
   constructor() {
     this.figures = [];
@@ -73,6 +75,7 @@ export class FigureManagerUI {
       li.appendChild(actions);
 
       li.addEventListener("click", () => {
+        setActiveFigureProperties(fig);
         const desc = document.getElementById("prop-active-desc");
         if (desc) {
           desc.innerHTML = `
@@ -80,6 +83,8 @@ export class FigureManagerUI {
             Source: ${fig.source}<br>
             Caption: ${fig.caption || "(None)"}<br>
             Width: ${fig.width || "16cm"}<br>
+            Height: ${fig.height || "auto"}<br>
+            Alignment: ${fig.alignment || "center"}<br>
             <div style="margin-top: 8px; text-align: center; background: #fff; padding: 6px; border-radius: 4px;">
               <img src="/api/figures/${sessionId}/${fig.id}/preview" style="max-width: 100%; max-height: 120px; object-fit: contain;">
             </div>

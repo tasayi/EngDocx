@@ -184,6 +184,24 @@
             <input type="text" id="prop-margins" class="input-text" value="25mm">
           </div>
 
+          <div class="prop-section" id="prop-section-figure">
+            <div class="prop-title">Figure Properties</div>
+            <label>Alignment</label>
+            <div class="btn-group" id="group-figure-alignment">
+              <button class="group-btn" data-val="left">Left</button>
+              <button class="group-btn active" data-val="center">Center</button>
+              <button class="group-btn" data-val="right">Right</button>
+            </div>
+
+            <label>Width</label>
+            <input type="text" id="prop-fig-width" class="input-text" value="16cm" placeholder="e.g. 16cm, 100%, 500px">
+
+            <label>Height</label>
+            <input type="text" id="prop-fig-height" class="input-text" value="auto" placeholder="e.g. auto, 8cm, 300px">
+
+            <button class="btn-sm" id="btn-insert-figure-prop" style="width: 100%; margin-top: 10px;">Insert @figure Directive</button>
+          </div>
+
           <div class="prop-section">
             <div class="prop-title">Active Element</div>
             <div id="prop-active-desc" class="info-box">Select an element or figure in the navigator to inspect details.</div>
