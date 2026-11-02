@@ -108,6 +108,8 @@ class FigureConverter:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         target_ext = preferred_format.lower().lstrip(".")
+        if source_path.suffix.lower() == ".svg" and target_ext == "emf":
+            target_ext = "svg"  # use SVG directly, no external converter
         target_filename = f"{figure.id}.{target_ext}"
         compiled_path = cache_dir / target_filename
         rel_compiled = f"{cls.CACHE_SUBDIR}/{target_filename}"
@@ -127,7 +129,9 @@ class FigureConverter:
         # Cache is stale or missing -> convert
         source_ext = source_path.suffix.lower()
 
-        if source_ext == ".svg":
+        if source_ext == ".svg" and target_ext == "svg":
+            shutil.copy2(source_path, compiled_path)
+        elif source_ext == ".svg":
             try:
                 cls.convert_svg(source_path, compiled_path, target_format=target_ext)
             except Exception as e:

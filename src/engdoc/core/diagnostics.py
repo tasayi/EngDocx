@@ -71,8 +71,26 @@ def check_inkscape() -> ToolStatus:
     ver = _check_cli_version([path, "--version"])
     return ToolStatus(name="Inkscape", available=True, path=path, version=ver, required=False)
 
-def check_libreoffice() -> ToolStatus:
+def find_libreoffice() -> str | None:
+    """Locates soffice on PATH, LIBREOFFICE_PATH, or default Windows install dirs."""
+    import os
+
     path = shutil.which("libreoffice") or shutil.which("soffice")
+    if path:
+        return path
+    candidates = [os.environ.get("LIBREOFFICE_PATH", "")]
+    if sys.platform == "win32":
+        for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                candidates.append(os.path.join(base, "LibreOffice", "program", "soffice.exe"))
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+def check_libreoffice() -> ToolStatus:
+    path = find_libreoffice()
     if not path:
         return ToolStatus(
             name="LibreOffice",

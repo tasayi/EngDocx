@@ -105,5 +105,6 @@ class FigureService:
         dim_str = " ".join(dim_parts)
 
         # Emits Pandoc image with crossref ID, alignment in title, and dimension attributes
-        return f'\n![{full_caption}]({rel_compiled} "align:{alignment}"){{#fig:{fig_id} {dim_str}}}\n'
+        size_hint = f";width:{width}" + (f";height:{height}" if height and height.lower() != "auto" else "")
+        return f'\n![{full_caption}]({rel_compiled} "align:{alignment}{size_hint}"){{#fig:{fig_id} {dim_str}}}\n'
 

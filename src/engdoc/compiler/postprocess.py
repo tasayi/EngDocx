@@ -14,7 +14,7 @@ from engdoc.compiler.layout import W_NS, SectionLayout
 MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-NSMAP = {"w": W_NS, "wp": WP_NS}
+NSMAP = {"w": W_NS, "wp": WP_NS, "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 CAPTION_PREFIX_RE = re.compile(
     r"^(Figure(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE,
@@ -62,6 +62,28 @@ PPR_ORDER = {
 
 class DocxPostprocessor:
     """Post-processes Pandoc-generated Word DOCX files for sections, figures, and captions."""
+
+    @classmethod
+    def _apply_size_hint(cls, p: etree.Element, title: str) -> None:
+        """Forces drawing extents from 'width:'/'height:' hints in the docPr title."""
+        w_m = re.search(r"width:([\d.]+)\s*(cm|mm|in|pt|px)", title)
+        if not w_m:
+            return
+        h_m = re.search(r"height:([\d.]+)\s*(cm|mm|in|pt|px)", title)
+        emu = {"cm": 360000, "mm": 36000, "in": 914400, "pt": 12700, "px": 9525}
+        cx = int(float(w_m.group(1)) * emu[w_m.group(2)])
+        for extent in p.xpath(".//wp:extent", namespaces=NSMAP):
+            old_cx, old_cy = int(extent.get("cx", "0")), int(extent.get("cy", "0"))
+            if h_m:
+                cy = int(float(h_m.group(1)) * emu[h_m.group(2)])
+            else:
+                cy = int(cx * old_cy / old_cx) if old_cx else old_cy
+            extent.set("cx", str(cx))
+            extent.set("cy", str(cy))
+            inline = extent.getparent()
+            for a_ext in inline.xpath(".//a:xfrm/a:ext", namespaces=NSMAP):
+                a_ext.set("cx", str(cx))
+                a_ext.set("cy", str(cy))
 
     @classmethod
     def _sort_pPr(cls, pPr: etree.Element) -> None:
@@ -234,6 +256,7 @@ class DocxPostprocessor:
                     elif "align:center" in title:
                         alignment = "center"
                     if title.startswith("align:"):
+                        cls._apply_size_hint(p, title)
                         doc_pr_elems[0].set("title", "")
 
                 # Horizontal alignment on drawing paragraph

@@ -6,6 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from engdoc.core.diagnostics import find_libreoffice
 from engdoc.core.exceptions import ExternalToolError
 
 
@@ -19,7 +20,7 @@ class PDFRunner:
             if importlib.util.find_spec("win32com.client") is not None:
                 return "word_com"
 
-        if shutil.which("libreoffice") or shutil.which("soffice"):
+        if find_libreoffice():
             return "libreoffice"
 
         return "none"
@@ -43,7 +44,7 @@ class PDFRunner:
         engine = cls.get_pdf_engine()
 
         if engine == "libreoffice":
-            lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
+            lo_bin = find_libreoffice()
             cmd = [
                 lo_bin,  # type: ignore
                 "--headless",

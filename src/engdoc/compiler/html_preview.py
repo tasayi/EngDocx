@@ -166,11 +166,11 @@ class HTMLPreviewGenerator:
                             img_src = f"/api/projects/{session_id}/assets/assets/figures/{fig_id}{ext}"
                             break
 
-            img_style = f"max-width: {width};"
+            img_style = f"width: {width}; max-width: 100%;"
             if height and height.lower() != "auto":
                 img_style += f" height: {height};"
             else:
-                img_style += " max-height: 400px;"
+                img_style += " height: auto;"
             img_style += " object-fit: contain; display: inline-block;"
 
             if img_src:
