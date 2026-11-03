@@ -99,7 +99,10 @@
             </ul>
           </div>
           <div class="tree-group">
-            <div class="tree-title">📑 Templates</div>
+            <div class="tree-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span>📑 Templates</span>
+              <button class="icon-btn" id="btn-nav-upload-template" title="Select Template Document (.docx)">+</button>
+            </div>
             <ul id="tree-templates" class="tree-list">
               <li class="empty-hint">No templates loaded.</li>
             </ul>
@@ -337,12 +340,14 @@
           <p style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
             Reference Word templates define document typography, header/footer branding, table styling, and margins when compiling to Word (.docx) and PDF.
           </p>
-          <label>Available Templates</label>
+          <button id="btn-upload-template" class="btn-sm btn-accent" style="margin-bottom: 8px;">📁 Select Template Document (.docx)</button>
+          <label>Active Template</label>
           <ul id="list-templates" class="tree-list" style="background: var(--bg-surface); padding: 8px; border-radius: 4px; max-height: 200px; overflow-y: auto;">
             <li>Loading templates...</li>
           </ul>
         </div>
         <div class="modal-footer">
+          <input type="file" id="input-upload-template" accept=".docx" style="display: none;">
           <button id="modal-templates-close-bottom-btn">Close</button>
         </div>
       </div>

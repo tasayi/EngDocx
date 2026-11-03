@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -230,3 +230,39 @@ async def list_templates(session_id: str | None = None) -> TemplateListResponse:
             pass
     tpls = TemplateManager.list_available_templates(workspace)
     return TemplateListResponse(templates=tpls)
+
+
+@router.post("/templates/{session_id}/upload")
+async def upload_template(session_id: str, file: UploadFile = File(...)) -> dict[str, str]:
+    """Uploads a .docx into the project's templates/ folder and validates it."""
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    name = Path(file.filename or "").name
+    if not name.lower().endswith(".docx"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Template must be a .docx file."
+        )
+
+    tpl_dir = session.workspace_dir / "templates"
+    tpl_dir.mkdir(parents=True, exist_ok=True)
+    dest = tpl_dir / name
+    dest.write_bytes(await file.read())
+
+    if not TemplateManager.validate_template(dest):
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is not a valid Word document.",
+        )
+
+    for old in tpl_dir.glob("*.docx"):
+        if old.name != name:
+            old.unlink()
+            session.dirty_files.add(f"templates/{old.name}")
+
+    session.is_dirty = True
+    session.dirty_files.add(f"templates/{name}")
+    return {"name": name, "path": f"templates/{name}"}

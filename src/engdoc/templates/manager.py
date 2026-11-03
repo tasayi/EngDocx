@@ -40,6 +40,17 @@ class TemplateManager:
         """Lists all template names available in the global templates dir and project session."""
         templates: set[str] = set()
 
+        # A project-specific template replaces the global ones
+        if session_workspace:
+            sess_dir = session_workspace / "templates"
+            if sess_dir.is_dir():
+                own = [
+                    f for f in os.listdir(sess_dir)
+                    if f.endswith(".docx") and not f.startswith("~$")
+                ]
+                if own:
+                    return sorted(own)
+
         # Global templates
         if settings.TEMPLATES_DIR.is_dir():
             for f in os.listdir(settings.TEMPLATES_DIR):
@@ -95,6 +106,9 @@ class TemplateManager:
                         cand = (session_workspace / rel_tpl).resolve()
                         if cand.is_file():
                             return cand
+                        global_cand = settings.TEMPLATES_DIR / Path(rel_tpl).name
+                        if global_cand.is_file():
+                            return global_cand.resolve()
                 except Exception:
                     pass
 

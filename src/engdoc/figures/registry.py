@@ -116,7 +116,9 @@ class FigureRegistryManager:
         """Removes a figure from the registry."""
         registry = cls.load_registry(workspace_dir)
         if figure_id in registry.figures:
-            del registry.figures[figure_id]
+            fig = registry.figures.pop(figure_id)
+            if fig.compiled_asset:
+                (workspace_dir / fig.compiled_asset).unlink(missing_ok=True)
             cls.save_registry(workspace_dir, registry)
             return True
         return False
@@ -149,7 +151,7 @@ class FigureRegistryManager:
                 new_compiled_name = f"{new_id}{old_compiled.suffix}"
                 new_compiled = old_compiled.parent / new_compiled_name
                 try:
-                    old_compiled.rename(new_compiled)
+                    old_compiled.replace(new_compiled)
                     fig.compiled_asset = f"{old_compiled.parent.relative_to(workspace_dir)}/{new_compiled_name}".replace("\\", "/")
                 except Exception:
                     pass

@@ -15,6 +15,7 @@ from typing import Any
 
 from lxml import etree
 
+from engdoc.compiler.postprocess import DocxPostprocessor
 from engdoc.compiler.runner import PandocRunner
 from engdoc.core.exceptions import (
     EngDocError,
@@ -29,9 +30,18 @@ from engdoc.documents.patch_models import (
     PatchPreviewResult,
     PatchTarget,
 )
+from engdoc.figures.service import FigureService
+from engdoc.markup.parser import EMDParser
 
 NS_W = NAMESPACES["w"]
 NS_R = NAMESPACES["r"]
+CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+NUMBERING_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering"
+)
+NUMBERING_CT = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"
+)
 
 
 class DocxPatcher:
@@ -60,7 +70,7 @@ class DocxPatcher:
 
         try:
             # 1. Compile EMD snippet to count body elements
-            snippet_elements, _, _ = await cls._compile_snippet_to_elements(emd_text)
+            snippet_elements = (await cls._compile_snippet_to_elements(emd_text))[0]
 
             # 2. Inspect target document to locate anchor
             inspection = DocxInspector.inspect_file(target_docx)
@@ -218,8 +228,10 @@ class DocxPatcher:
             raise InvalidDocumentError(f"Target file is not a valid zip archive: {target_path}")
 
         # 1. Compile EMD snippet into XML body elements and media assets
-        snippet_elements, snippet_rels, snippet_media = (
-            await cls._compile_snippet_to_elements(emd_text, workspace_dir=workspace_dir)
+        snippet_elements, snippet_rels, snippet_media, snippet_styles, snippet_numbering = (
+            await cls._compile_snippet_to_elements(
+                emd_text, workspace_dir=workspace_dir, reference_docx=target_path
+            )
         )
 
         if not snippet_elements and action != PatchAction.REPLACE:
@@ -252,17 +264,48 @@ class DocxPatcher:
                     f"Target anchor '{target.anchor_name}' of type {target.anchor_type.value} was not found."
                 )
 
-            # 4. Perform surgical DOM modification based on requested action
-            elements_deleted = cls._splice_elements(
-                body_elem=body_elem,
-                anchor_node=anchor_node,
-                snippet_elements=snippet_elements,
-                action=action,
-                target=target,
-            )
-
-            # 5. Merge snippet relationships into target relationships
+            # 4. Merge styles, numbering and relationships first so that the snippet's
+            # IDs are rewritten before the elements are copied into the document.
             merged_media: dict[str, bytes] = {}
+            replaced_parts: dict[str, bytes] = {}
+            new_parts: dict[str, bytes] = {}
+            content_types_tree = None
+
+            if snippet_styles and "word/styles.xml" in namelist:
+                styles_tree = etree.fromstring(zf.read("word/styles.xml"))
+                if cls._merge_styles(styles_tree, snippet_styles):
+                    replaced_parts["word/styles.xml"] = etree.tostring(
+                        styles_tree, xml_declaration=True, encoding="utf-8", standalone=True
+                    )
+
+            uses_lists = any(
+                el.xpath(".//w:numPr/w:numId", namespaces=NAMESPACES) for el in snippet_elements
+            )
+            if snippet_numbering and uses_lists:
+                if "word/numbering.xml" in namelist:
+                    num_tree = etree.fromstring(zf.read("word/numbering.xml"))
+                    cls._merge_numbering(num_tree, snippet_numbering, snippet_elements)
+                    replaced_parts["word/numbering.xml"] = etree.tostring(
+                        num_tree, xml_declaration=True, encoding="utf-8", standalone=True
+                    )
+                elif target_rels_tree is not None and "[Content_Types].xml" in namelist:
+                    new_parts["word/numbering.xml"] = snippet_numbering
+                    content_types_tree = etree.fromstring(zf.read("[Content_Types].xml"))
+                    etree.SubElement(
+                        content_types_tree,
+                        f"{{{CT_NS}}}Override",
+                        PartName="/word/numbering.xml",
+                        ContentType=NUMBERING_CT,
+                    )
+                    rel_ns = etree.QName(target_rels_tree).namespace
+                    etree.SubElement(
+                        target_rels_tree,
+                        f"{{{rel_ns}}}Relationship",
+                        Id="rIdPatchNumbering",
+                        Type=NUMBERING_REL_TYPE,
+                        Target="numbering.xml",
+                    )
+
             if snippet_rels and target_rels_tree is not None:
                 cls._merge_relationships(
                     target_rels_tree=target_rels_tree,
@@ -271,6 +314,15 @@ class DocxPatcher:
                     snippet_media=snippet_media,
                     merged_media=merged_media,
                 )
+
+            # 5. Perform surgical DOM modification based on requested action
+            elements_deleted = cls._splice_elements(
+                body_elem=body_elem,
+                anchor_node=anchor_node,
+                snippet_elements=snippet_elements,
+                action=action,
+                target=target,
+            )
 
             # 6. Write patched document atomically to output_docx
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,8 +344,23 @@ class DocxPatcher:
                             standalone=True,
                         )
                         out_zf.writestr(item, rels_xml)
+                    elif item.filename == "[Content_Types].xml" and content_types_tree is not None:
+                        out_zf.writestr(
+                            item,
+                            etree.tostring(
+                                content_types_tree,
+                                xml_declaration=True,
+                                encoding="utf-8",
+                                standalone=True,
+                            ),
+                        )
+                    elif item.filename in replaced_parts:
+                        out_zf.writestr(item, replaced_parts[item.filename])
                     else:
                         out_zf.writestr(item, zf.read(item.filename))
+
+                for part_name, part_data in new_parts.items():
+                    out_zf.writestr(part_name, part_data)
 
                 # Add new media items from snippet
                 for media_name, media_data in merged_media.items():
@@ -324,29 +391,58 @@ class DocxPatcher:
 
     @classmethod
     async def _compile_snippet_to_elements(
-        cls, emd_text: str, workspace_dir: Path | None = None
-    ) -> tuple[list[etree._Element], list[etree._Element], dict[str, bytes]]:
-        """Compiles an EMD text snippet into OpenXML body elements, relationships, and media."""
+        cls,
+        emd_text: str,
+        workspace_dir: Path | None = None,
+        reference_docx: Path | None = None,
+    ) -> tuple[
+        list[etree._Element],
+        list[etree._Element],
+        dict[str, bytes],
+        bytes | None,
+        bytes | None,
+    ]:
+        """Compiles an EMD snippet into body elements, rels, media, styles.xml and numbering.xml.
+
+        The snippet is rendered through the full EMD pipeline (directives, figures, section
+        layout) using reference_docx so its styles match the document being patched.
+        """
         if not emd_text.strip():
-            return [], [], {}
+            return [], [], {}, None, None
+
+        figure_resolver = None
+        if workspace_dir is not None and workspace_dir.is_dir():
+            FigureService.prepare_session_figures(workspace_dir)
+
+            def figure_resolver(fid, params):
+                return FigureService.resolve_figure_directive(fid, params, workspace_dir)
+
+        emd_doc = EMDParser.parse(emd_text)
+        pandoc_md = EMDParser.preprocess_for_pandoc(emd_doc, figure_resolver=figure_resolver)
 
         with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_out:
             tmp_out_docx = Path(tmp_out.name)
 
         try:
             res = await PandocRunner.compile_to_docx(
-                markdown_text=emd_text,
+                markdown_text=pandoc_md,
                 output_path=tmp_out_docx,
+                reference_docx=reference_docx,
                 cwd=workspace_dir,
             )
             if not res.success or not tmp_out_docx.is_file():
                 raise EngDocError(f"Failed to compile patch snippet: {res.error_message}")
 
+            DocxPostprocessor.process(tmp_out_docx)
+
             elements: list[etree._Element] = []
             rels: list[etree._Element] = []
             media_files: dict[str, bytes] = {}
+            styles_xml: bytes | None = None
+            numbering_xml: bytes | None = None
 
             with zipfile.ZipFile(tmp_out_docx, "r") as zf:
+                names = set(zf.namelist())
                 # Read body elements
                 frag_doc_tree = etree.fromstring(zf.read("word/document.xml"))
                 frag_body = frag_doc_tree.find(f"{{{NS_W}}}body")
@@ -356,23 +452,98 @@ class DocxPatcher:
                         if child.tag != f"{{{NS_W}}}sectPr":
                             elements.append(copy.deepcopy(child))
 
+                # Header/footer rIds belong to the temp package, so inherit them instead
+                for el in elements:
+                    for ref in el.xpath(
+                        ".//w:sectPr/w:headerReference | .//w:sectPr/w:footerReference",
+                        namespaces=NAMESPACES,
+                    ):
+                        ref.getparent().remove(ref)
+
                 # Read relationships
-                if "word/_rels/document.xml.rels" in zf.namelist():
+                if "word/_rels/document.xml.rels" in names:
                     frag_rels_tree = etree.fromstring(
                         zf.read("word/_rels/document.xml.rels")
                     )
                     rels = [copy.deepcopy(r) for r in frag_rels_tree]
 
                 # Read media files
-                for name in zf.namelist():
+                for name in names:
                     if name.startswith("word/media/"):
                         m_name = Path(name).name
                         media_files[m_name] = zf.read(name)
 
-            return elements, rels, media_files
+                if "word/styles.xml" in names:
+                    styles_xml = zf.read("word/styles.xml")
+                if "word/numbering.xml" in names:
+                    numbering_xml = zf.read("word/numbering.xml")
+
+            return elements, rels, media_files, styles_xml, numbering_xml
         finally:
             if tmp_out_docx.exists():
                 tmp_out_docx.unlink()
+
+    @classmethod
+    def _merge_styles(cls, target_styles: etree._Element, snippet_styles_xml: bytes) -> bool:
+        """Copies styles used by the snippet that the target document does not define."""
+        snippet_root = etree.fromstring(snippet_styles_xml)
+        sid_attr = f"{{{NS_W}}}styleId"
+        existing = {s.get(sid_attr) for s in target_styles.findall(f"{{{NS_W}}}style")}
+        changed = False
+        for style in snippet_root.findall(f"{{{NS_W}}}style"):
+            if style.get(sid_attr) not in existing:
+                target_styles.append(copy.deepcopy(style))
+                changed = True
+        return changed
+
+    @classmethod
+    def _merge_numbering(
+        cls,
+        target_numbering: etree._Element,
+        snippet_numbering_xml: bytes,
+        snippet_elements: list[etree._Element],
+    ) -> None:
+        """Adds snippet list definitions to the target numbering part and remaps numId usage."""
+        snippet_root = etree.fromstring(snippet_numbering_xml)
+        w = f"{{{NS_W}}}"
+
+        def max_id(tag: str, attr: str) -> int:
+            return max(
+                (int(e.get(f"{w}{attr}", "0")) for e in target_numbering.findall(f"{w}{tag}")),
+                default=0,
+            )
+
+        abs_offset = max_id("abstractNum", "abstractNumId") + 1
+        num_offset = max_id("num", "numId") + 1
+
+        first_num = target_numbering.find(f"{w}num")
+        for an in snippet_root.findall(f"{w}abstractNum"):
+            new_an = copy.deepcopy(an)
+            new_an.set(
+                f"{w}abstractNumId", str(int(an.get(f"{w}abstractNumId", "0")) + abs_offset)
+            )
+            if first_num is not None:
+                first_num.addprevious(new_an)
+            else:
+                target_numbering.append(new_an)
+
+        num_map: dict[str, str] = {}
+        for num in snippet_root.findall(f"{w}num"):
+            old = num.get(f"{w}numId", "0")
+            new_num = copy.deepcopy(num)
+            new_id = str(int(old) + num_offset)
+            new_num.set(f"{w}numId", new_id)
+            ref = new_num.find(f"{w}abstractNumId")
+            if ref is not None:
+                ref.set(f"{w}val", str(int(ref.get(f"{w}val", "0")) + abs_offset))
+            target_numbering.append(new_num)
+            num_map[old] = new_id
+
+        for el in snippet_elements:
+            for node in el.xpath(".//w:numPr/w:numId", namespaces=NAMESPACES):
+                val = node.get(f"{w}val")
+                if val in num_map:
+                    node.set(f"{w}val", num_map[val])
 
     @classmethod
     def _locate_anchor(
@@ -700,6 +871,13 @@ class DocxPatcher:
             if not old_id:
                 continue
 
+            # Skip package-level rels (styles, settings, theme...) the snippet body never uses
+            if not any(
+                old_id in node.attrib.values()
+                for el in snippet_elements
+                for node in el.iter(etree.Element)
+            ):
+                continue
             target_val = s_rel.get("Target", "")
             type_val = s_rel.get("Type", "")
 

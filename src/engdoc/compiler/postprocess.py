@@ -2,6 +2,7 @@
 
 import json
 import os
+import posixpath
 import re
 import tempfile
 import zipfile
@@ -101,90 +102,61 @@ class DocxPostprocessor:
             pPr.append(c)
 
     @classmethod
-    def _ensure_font_size(cls, rPr: etree.Element, sz_val: str = "20") -> None:
-        """Sets sz and szCs in rPr to enforce font size (20 = 10pt)."""
-        sz = rPr.find(f"{{{W_NS}}}sz")
-        if sz is None:
-            sz = etree.SubElement(rPr, f"{{{W_NS}}}sz")
-        sz.set(f"{{{W_NS}}}val", sz_val)
-
-        sz_cs = rPr.find(f"{{{W_NS}}}szCs")
-        if sz_cs is None:
-            sz_cs = etree.SubElement(rPr, f"{{{W_NS}}}szCs")
-        sz_cs.set(f"{{{W_NS}}}val", sz_val)
-
-    @classmethod
-    def _format_caption_runs(cls, p: etree.Element) -> None:
-        """Formats the caption paragraph runs so that 'Figure <ID>: ' is bolded and 10pt font is set."""
-        text_nodes = p.xpath(".//w:t", namespaces=NSMAP)
-        full_text = "".join(t.text or "" for t in text_nodes)
+    def _make_caption_runs(cls, p: etree.Element, number: int) -> None:
+        """Rewrites a caption as 'Figure <SEQ field>: description' so numbering is automatic."""
+        full_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
         m = CAPTION_PREFIX_RE.match(full_text)
         if not m:
             return
+        desc = m.group(2).strip()
 
-        prefix = m.group(1)
-        runs = p.findall(f"{{{W_NS}}}r")
-        if not runs:
-            return
+        for child in list(p):
+            if child.tag != f"{{{W_NS}}}pPr":
+                p.remove(child)
 
-        first_r = runs[0]
-        first_t = first_r.find(f"{{{W_NS}}}t")
-        if first_t is None or not first_t.text:
-            return
+        def add_run(parent: etree.Element, text: str) -> None:
+            r = etree.SubElement(parent, f"{{{W_NS}}}r")
+            t = etree.SubElement(r, f"{{{W_NS}}}t")
+            t.set(f"{{{XML_NS}}}space", "preserve")
+            t.text = text
 
-        first_text = first_t.text
-        if first_text.startswith(prefix):
-            remainder = first_text[len(prefix) :]
-            rPr = first_r.find(f"{{{W_NS}}}rPr")
-            if rPr is None:
-                rPr = etree.Element(f"{{{W_NS}}}rPr")
-                first_r.insert(0, rPr)
-            if rPr.find(f"{{{W_NS}}}b") is None:
-                rPr.append(etree.Element(f"{{{W_NS}}}b"))
-            if rPr.find(f"{{{W_NS}}}bCs") is None:
-                rPr.append(etree.Element(f"{{{W_NS}}}bCs"))
-            cls._ensure_font_size(rPr, "20")
+        add_run(p, "Figure ")
+        fld = etree.SubElement(p, f"{{{W_NS}}}fldSimple")
+        fld.set(f"{{{W_NS}}}instr", SEQ_FIGURE_INSTR)
+        add_run(fld, str(number))
+        add_run(p, f": {desc}" if desc else "")
 
-            first_t.text = prefix
-            first_t.set(f"{{{XML_NS}}}space", "preserve")
+    @classmethod
+    def renumber_figure_fields(cls, body: etree.Element) -> None:
+        """Refreshes cached results of every 'SEQ Figure' field in document order."""
+        counter = 0
+        for p in body.iter(f"{{{W_NS}}}p"):
+            for fld in p.iter(f"{{{W_NS}}}fldSimple"):
+                if "SEQ Figure" in (fld.get(f"{{{W_NS}}}instr") or ""):
+                    counter += 1
+                    for t in fld.iter(f"{{{W_NS}}}t"):
+                        t.text = str(counter)
+                        break
 
-            if remainder:
-                idx = p.index(first_r)
-                rem_r = etree.Element(f"{{{W_NS}}}r")
-                rem_rPr = etree.SubElement(rem_r, f"{{{W_NS}}}rPr")
-                cls._ensure_font_size(rem_rPr, "20")
-                rem_t = etree.SubElement(rem_r, f"{{{W_NS}}}t")
-                rem_t.set(f"{{{XML_NS}}}space", "preserve")
-                rem_t.text = remainder
-                p.insert(idx + 1, rem_r)
-        else:
-            remainder = full_text[len(prefix) :]
-            for r in list(runs):
-                p.remove(r)
-            r_prefix = etree.SubElement(p, f"{{{W_NS}}}r")
-            rPr_prefix = etree.SubElement(r_prefix, f"{{{W_NS}}}rPr")
-            etree.SubElement(rPr_prefix, f"{{{W_NS}}}b")
-            etree.SubElement(rPr_prefix, f"{{{W_NS}}}bCs")
-            cls._ensure_font_size(rPr_prefix, "20")
-            t_prefix = etree.SubElement(r_prefix, f"{{{W_NS}}}t")
-            t_prefix.set(f"{{{XML_NS}}}space", "preserve")
-            t_prefix.text = prefix
-
-            if remainder:
-                r_rem = etree.SubElement(p, f"{{{W_NS}}}r")
-                rPr_rem = etree.SubElement(r_rem, f"{{{W_NS}}}rPr")
-                cls._ensure_font_size(rPr_rem, "20")
-                t_rem = etree.SubElement(r_rem, f"{{{W_NS}}}t")
-                t_rem.set(f"{{{XML_NS}}}space", "preserve")
-                t_rem.text = remainder
-
-        # Ensure all runs in p strictly have 10pt size (20 half-points)
-        for r in p.findall(f"{{{W_NS}}}r"):
-            rPr = r.find(f"{{{W_NS}}}rPr")
-            if rPr is None:
-                rPr = etree.Element(f"{{{W_NS}}}rPr")
-                r.insert(0, rPr)
-            cls._ensure_font_size(rPr, "20")
+            runs = list(p.iter(f"{{{W_NS}}}r"))
+            for i, r in enumerate(runs):
+                instr = r.find(f"{{{W_NS}}}instrText")
+                if instr is None or "SEQ Figure" not in (instr.text or ""):
+                    continue
+                counter += 1
+                separated = False
+                for nxt in runs[i + 1 :]:
+                    fc = nxt.find(f"{{{W_NS}}}fldChar")
+                    kind = fc.get(f"{{{W_NS}}}fldCharType") if fc is not None else None
+                    if kind == "end":
+                        break
+                    if kind == "separate":
+                        separated = True
+                    elif separated:
+                        t = nxt.find(f"{{{W_NS}}}t")
+                        if t is not None:
+                            t.text = str(counter)
+                            break
 
     @classmethod
     def process(
@@ -210,10 +182,13 @@ class DocxPostprocessor:
             with zipfile.ZipFile(docx_path, "r") as z_in, zipfile.ZipFile(
                 tmp_docx_path, "w", compression=zipfile.ZIP_DEFLATED
             ) as z_out:
+                names = set(z_in.namelist())
                 for item in z_in.infolist():
                     data = z_in.read(item.filename)
                     if item.filename == "word/document.xml":
                         data = cls._process_document_xml(data, current_layout)
+                    elif item.filename.endswith(".rels"):
+                        data = cls._drop_dangling_rels(item.filename, data, names)
                     z_out.writestr(item, data)
 
             os.replace(tmp_docx_path, docx_path)
@@ -221,6 +196,27 @@ class DocxPostprocessor:
         finally:
             if tmp_docx_path.exists():
                 tmp_docx_path.unlink()
+
+    @classmethod
+    def _drop_dangling_rels(cls, rels_name: str, data: bytes, names: set[str]) -> bytes:
+        """Removes internal relationships whose target part is missing (e.g. stale template media)."""
+        root = etree.fromstring(data)
+        base = posixpath.dirname(posixpath.dirname(rels_name))
+        changed = False
+        for rel in list(root):
+            target = rel.get("Target") or ""
+            if rel.get("TargetMode") == "External" or not target:
+                continue
+            if target.startswith("/"):
+                part = target.lstrip("/")
+            else:
+                part = posixpath.normpath(posixpath.join(base, target))
+            if part not in names:
+                root.remove(rel)
+                changed = True
+        if not changed:
+            return data
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     @classmethod
     def _process_document_xml(

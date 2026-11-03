@@ -212,6 +212,8 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 16px;
+  grid-auto-rows: max-content;
+  align-content: start;
   overflow-y: auto;
   max-height: 55vh;
   padding: 4px;

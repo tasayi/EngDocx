@@ -117,6 +117,7 @@ class FigureConverter:
         # Check cache validity
         if (
             figure.source_hash == current_hash
+            and figure.compiled_asset in (None, rel_compiled)
             and compiled_path.is_file()
             and compiled_path.stat().st_size > 0
         ):

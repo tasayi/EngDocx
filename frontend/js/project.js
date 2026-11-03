@@ -967,24 +967,92 @@ export function initProjectManager() {
   const modalTplBottomClose = document.getElementById('modal-templates-close-bottom-btn');
 
   if (btnMenuTemplates && modalTemplates) {
+    const setDefaultTemplate = async (name) => {
+      const res = await fetch(`/api/projects/${projectState.sessionId}/manifest`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ default_template: `templates/${name}` }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      projectState.manifest = await res.json();
+    };
+
+    const loadTemplates = async () => {
+      const listEl = document.getElementById('list-templates');
+      if (!listEl) return;
+      listEl.innerHTML = '<li>Loading templates...</li>';
+      try {
+        const sessParam = projectState.sessionId ? `?session_id=${projectState.sessionId}` : '';
+        const res = await fetch(`/api/compile/templates${sessParam}`);
+        const data = await res.json();
+        const current = (projectState.manifest?.template?.default || '').split('/').pop();
+        listEl.innerHTML = '';
+        data.templates.forEach((t) => {
+          const li = document.createElement('li');
+          const isActive = t === current;
+          li.innerHTML = `📘 <strong>${t}</strong> `;
+          if (isActive) {
+            li.innerHTML += '<span style="font-size: 10px; color: var(--success-color);">(Active)</span>';
+          } else if (projectState.sessionId) {
+            const btn = document.createElement('button');
+            btn.className = 'btn-sm';
+            btn.textContent = 'Use as template';
+            btn.onclick = async () => {
+              try {
+                await setDefaultTemplate(t);
+                await loadTemplates();
+              } catch (err) {
+                alert(`Failed to set template: ${err.message}`);
+              }
+            };
+            li.appendChild(btn);
+          }
+          listEl.appendChild(li);
+        });
+      } catch (err) {
+        listEl.innerHTML = `<li>default_engineering.docx</li>`;
+      }
+    };
+
     btnMenuTemplates.addEventListener('click', async () => {
       modalTemplates.style.display = 'flex';
-      const listEl = document.getElementById('list-templates');
-      if (listEl) {
-        listEl.innerHTML = '<li>Loading templates...</li>';
-        try {
-          const sessParam = projectState.sessionId ? `?session_id=${projectState.sessionId}` : '';
-          const res = await fetch(`/api/compile/templates${sessParam}`);
-          const data = await res.json();
-          listEl.innerHTML = '';
-          data.templates.forEach((t) => {
-            const li = document.createElement('li');
-            li.innerHTML = `📘 <strong>${t}</strong> <span style="font-size: 10px; color: var(--success-color);">(Available)</span>`;
-            listEl.appendChild(li);
-          });
-        } catch (err) {
-          listEl.innerHTML = `<li>default_engineering.docx</li>`;
+      await loadTemplates();
+    });
+
+    const inputUploadTpl = document.getElementById('input-upload-template');
+    const pickTemplate = () => {
+      if (!projectState.sessionId) {
+        alert('Please create or open a project first.');
+        return;
+      }
+      inputUploadTpl.value = '';
+      inputUploadTpl.click();
+    };
+    document.getElementById('btn-upload-template')?.addEventListener('click', pickTemplate);
+    document.getElementById('btn-nav-upload-template')?.addEventListener('click', pickTemplate);
+    inputUploadTpl?.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const res = await fetch(`/api/compile/templates/${projectState.sessionId}/upload`, {
+          method: 'POST',
+          body: form,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
         }
+        const saved = await res.json();
+        await setDefaultTemplate(saved.name);
+        await projectState.refreshTree();
+        await loadTemplates();
+      } catch (err) {
+        alert(`Template upload failed: ${err.message}`);
       }
     });
 
