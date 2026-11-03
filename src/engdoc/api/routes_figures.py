@@ -1,5 +1,6 @@
 """Figure Management API Routes."""
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -28,6 +29,41 @@ class RenameFigureRequest(BaseModel):
 
 class BatchDeleteFiguresRequest(BaseModel):
     figure_ids: list[str]
+
+
+class ReplaceFiguresResponse(BaseModel):
+    updated_figures: list[FigureMetadata]
+    success: bool = True
+    count: int
+
+
+def _figure_sort_key(fig_id: str) -> tuple[int, str]:
+    if fig_id.startswith("FIG-"):
+        parts = fig_id.split("-", 1)
+        if len(parts) == 2 and parts[1].isdigit():
+            return (int(parts[1]), fig_id)
+    return (999999, fig_id)
+
+
+def _normalize_target_ids(raw_target_ids: list[str]) -> list[str]:
+    result: list[str] = []
+    for item in raw_target_ids:
+        item = item.strip()
+        if not item:
+            continue
+        if item.startswith("[") and item.endswith("]"):
+            try:
+                parsed = json.loads(item)
+                if isinstance(parsed, list):
+                    result.extend([str(x).strip() for x in parsed if str(x).strip()])
+                    continue
+            except Exception:
+                pass
+        if "," in item:
+            result.extend([p.strip() for p in item.split(",") if p.strip()])
+        else:
+            result.append(item)
+    return result
 
 
 @router.get("/{session_id}", response_model=FigureListResponse)
@@ -226,4 +262,81 @@ async def batch_delete_figures(
     session.is_dirty = True
     session.dirty_files.add("metadata/figures.yaml")
     return {"deleted_count": count, "success": True}
+
+
+@router.post("/{session_id}/replace", response_model=ReplaceFiguresResponse)
+async def replace_figures(
+    session_id: str,
+    target_ids: list[str] = Form(...),
+    files: list[UploadFile] = File(...),
+) -> ReplaceFiguresResponse:
+    """Replaces existing figure assets with newly uploaded files while preserving IDs and metadata.
+
+    Enforces strict 1-to-1 count parity: len(target_ids) == len(files).
+    Target IDs are ordered deterministically by ascending figure ID.
+    """
+    try:
+        session = SessionManager.get_session(session_id)
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+    parsed_target_ids = _normalize_target_ids(target_ids)
+
+    if not parsed_target_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No target figure IDs specified for replacement.",
+        )
+
+    if len(parsed_target_ids) != len(files):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Count mismatch: {len(parsed_target_ids)} target figure(s) selected, "
+                f"but {len(files)} replacement file(s) provided."
+            ),
+        )
+
+    # Verify that all target figure IDs exist in registry
+    registry = FigureRegistryManager.load_registry(session.workspace_dir)
+    missing = [tid for tid in parsed_target_ids if tid not in registry.figures]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Figure(s) not found in registry: {', '.join(missing)}",
+        )
+
+    # Sort target IDs deterministically in ascending order
+    sorted_targets = sorted(parsed_target_ids, key=_figure_sort_key)
+
+    updated_figures: list[FigureMetadata] = []
+    for tid, up_file in zip(sorted_targets, files, strict=True):
+        if not up_file.filename:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Uploaded file for figure [{tid}] has no filename.",
+            )
+        content_bytes = await up_file.read()
+        try:
+            meta = FigureRegistryManager.replace_figure_asset(
+                workspace_dir=session.workspace_dir,
+                figure_id=tid,
+                new_filename=up_file.filename,
+                new_content=content_bytes,
+            )
+            updated_figures.append(meta)
+            session.dirty_files.add(meta.source)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed replacing figure [{tid}]: {e}",
+            ) from e
+
+    session.is_dirty = True
+    session.dirty_files.add("metadata/figures.yaml")
+    return ReplaceFiguresResponse(
+        updated_figures=updated_figures,
+        success=True,
+        count=len(updated_figures),
+    )
 

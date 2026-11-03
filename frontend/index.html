@@ -294,6 +294,8 @@
             <span id="fig-selection-count" style="font-size: 11px; color: var(--text-muted); margin-left: 6px;">0 selected (Use Ctrl/Shift to multi-select)</span>
           </div>
           <div style="display: flex; gap: 8px; align-items: center;">
+            <button id="btn-fig-replace" class="btn-sm" disabled title="Replace selected figure(s) with new image file(s)">🔄 Replace Image(s)...</button>
+            <input type="file" id="input-replace-figure" accept=".svg,.png,.jpg,.jpeg" multiple style="display: none;">
             <button id="btn-fig-rename" class="btn-sm" disabled title="Rename selected figure ID/caption">✏️ Rename</button>
             <button id="btn-fig-batch-delete" class="btn-sm" style="color: var(--danger-color);" disabled title="Delete selected figures">🗑️ Delete Selected</button>
           </div>

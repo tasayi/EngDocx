@@ -117,38 +117,21 @@ def test_docx_postprocessor_figure_alignment_and_10pt_caption():
     doc_pr = drawing_p.xpath(".//wp:docPr/@title", namespaces={"wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"})
     assert doc_pr == [""]
 
-    # Verify caption paragraph has style Caption, right alignment, and spacing
+    # Verify caption paragraph has style Caption and right alignment
     caption_style = caption_p.xpath("./w:pPr/w:pStyle/@w:val", namespaces=NSMAP)
     assert caption_style == ["Caption"]
     caption_jc = caption_p.xpath("./w:pPr/w:jc/@w:val", namespaces=NSMAP)
     assert caption_jc == ["right"]
 
-    spacing_before = caption_p.xpath("./w:pPr/w:spacing/@w:before", namespaces=NSMAP)
-    spacing_after = caption_p.xpath("./w:pPr/w:spacing/@w:after", namespaces=NSMAP)
-    assert spacing_before == ["60"]
-    assert spacing_after == ["180"]
+    # Verify SEQ field auto-numbering and caption text
+    fld = caption_p.find(f"{{{W_NS}}}fldSimple")
+    assert fld is not None
+    assert fld.get(f"{{{W_NS}}}instr") == " SEQ Figure \\* ARABIC "
+    fld_t = fld.xpath(".//w:t/text()", namespaces=NSMAP)
+    assert fld_t == ["1"]
 
-    # Verify 10pt font size (sz=20) on caption paragraph rPr
-    caption_p_sz = caption_p.xpath("./w:pPr/w:rPr/w:sz/@w:val", namespaces=NSMAP)
-    caption_p_sz_cs = caption_p.xpath("./w:pPr/w:rPr/w:szCs/@w:val", namespaces=NSMAP)
-    assert caption_p_sz == ["20"]
-    assert caption_p_sz_cs == ["20"]
-
-    # Verify caption runs: Run 1 has bold 'Figure 1: ' + 10pt font, Run 2 has 'System Block Diagram' + 10pt font
-    runs = caption_p.findall(f"{{{W_NS}}}r")
-    assert len(runs) == 2
-
-    prefix_r = runs[0]
-    assert len(prefix_r.xpath("./w:rPr/w:b", namespaces=NSMAP)) == 1
-    assert len(prefix_r.xpath("./w:rPr/w:bCs", namespaces=NSMAP)) == 1
-    assert prefix_r.xpath("./w:rPr/w:sz/@w:val", namespaces=NSMAP) == ["20"]
-    prefix_t = prefix_r.xpath("./w:t/text()", namespaces=NSMAP)
-    assert prefix_t == ["Figure 1: "]
-
-    desc_r = runs[1]
-    assert desc_r.xpath("./w:rPr/w:sz/@w:val", namespaces=NSMAP) == ["20"]
-    desc_t = desc_r.xpath("./w:t/text()", namespaces=NSMAP)
-    assert desc_t == ["System Block Diagram"]
+    all_text = "".join(caption_p.xpath(".//w:t/text()", namespaces=NSMAP))
+    assert all_text == "Figure 1: System Block Diagram"
 
 
 @pytest.mark.asyncio

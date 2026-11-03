@@ -229,6 +229,7 @@ export class FigureManagerUI {
     const countEl = document.getElementById("fig-selection-count");
     const btnBatchDelete = document.getElementById("btn-fig-batch-delete");
     const btnRename = document.getElementById("btn-fig-rename");
+    const btnReplace = document.getElementById("btn-fig-replace");
 
     if (countEl) {
       countEl.textContent = `${count} selected (Use Ctrl/Shift to multi-select)`;
@@ -240,6 +241,10 @@ export class FigureManagerUI {
     if (btnRename) {
       btnRename.disabled = count !== 1;
     }
+    if (btnReplace) {
+      btnReplace.disabled = count === 0;
+      btnReplace.textContent = count > 1 ? `🔄 Replace Images (${count})...` : "🔄 Replace Image(s)...";
+    }
   }
 
   wireBatchToolbar(container, sessionId, onRefresh) {
@@ -247,16 +252,22 @@ export class FigureManagerUI {
     const btnDeselectAll = document.getElementById("btn-fig-deselect-all");
     const btnBatchDelete = document.getElementById("btn-fig-batch-delete");
     const btnRename = document.getElementById("btn-fig-rename");
+    const btnReplace = document.getElementById("btn-fig-replace");
+    const inputReplace = document.getElementById("input-replace-figure");
 
     btnSelectAll?.replaceWith(btnSelectAll.cloneNode(true));
     btnDeselectAll?.replaceWith(btnDeselectAll.cloneNode(true));
     btnBatchDelete?.replaceWith(btnBatchDelete.cloneNode(true));
     btnRename?.replaceWith(btnRename.cloneNode(true));
+    btnReplace?.replaceWith(btnReplace.cloneNode(true));
+    inputReplace?.replaceWith(inputReplace.cloneNode(true));
 
     const newBtnSelectAll = document.getElementById("btn-fig-select-all");
     const newBtnDeselectAll = document.getElementById("btn-fig-deselect-all");
     const newBtnBatchDelete = document.getElementById("btn-fig-batch-delete");
     const newBtnRename = document.getElementById("btn-fig-rename");
+    const newBtnReplace = document.getElementById("btn-fig-replace");
+    const newInputReplace = document.getElementById("input-replace-figure");
 
     newBtnSelectAll?.addEventListener("click", () => {
       this.figures.forEach((f) => this.selectedFigureIds.add(f.id));
@@ -269,6 +280,47 @@ export class FigureManagerUI {
       this.lastClickedIndex = null;
       this.updateCardSelectionVisuals(container);
       this.updateBatchToolbarState();
+    });
+
+    newBtnReplace?.addEventListener("click", () => {
+      if (this.selectedFigureIds.size === 0) return;
+      newInputReplace?.click();
+    });
+
+    newInputReplace?.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      newInputReplace.value = "";
+      if (files.length === 0) return;
+
+      const selectedCount = this.selectedFigureIds.size;
+      if (files.length !== selectedCount) {
+        alert(`Count mismatch error: You selected ${selectedCount} figure(s) to replace, but chose ${files.length} replacement file(s).\nPlease select exactly ${selectedCount} file(s).`);
+        return;
+      }
+
+      // Sort selected target IDs deterministically in ascending numeric ID order
+      const sortedTargetIds = Array.from(this.selectedFigureIds).sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, ""), 10) || 0;
+        const numB = parseInt(b.replace(/\D/g, ""), 10) || 0;
+        return numA - numB || a.localeCompare(b);
+      });
+
+      const confirmMsg = `Are you sure you want to replace ${selectedCount} figure(s):\n` +
+        sortedTargetIds.map((id, i) => `• ${id} ➔ ${files[i].name}`).join("\n") +
+        `\n\nFigure IDs, captions, dimensions, and document references will be preserved.`;
+
+      if (!confirm(confirmMsg)) {
+        return;
+      }
+
+      try {
+        await this.replaceFigures(sessionId, sortedTargetIds, files);
+        this.selectedFigureIds.clear();
+        this.lastClickedIndex = null;
+        if (onRefresh) await onRefresh();
+      } catch (err) {
+        alert(`Figure replacement failed: ${err.message}`);
+      }
     });
 
     newBtnBatchDelete?.addEventListener("click", async () => {
@@ -391,6 +443,30 @@ export class FigureManagerUI {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ new_id: newId, caption: newCaption }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+
+    await this.loadFigures(sessionId);
+  }
+
+  async replaceFigures(sessionId, targetIds, files) {
+    if (!sessionId || !targetIds || targetIds.length === 0 || !files || files.length === 0) return;
+
+    const formData = new FormData();
+    for (const tid of targetIds) {
+      formData.append("target_ids", tid);
+    }
+    for (const file of Array.from(files)) {
+      formData.append("files", file);
+    }
+
+    const res = await fetch(`/api/figures/${sessionId}/replace`, {
+      method: "POST",
+      body: formData,
     });
 
     if (!res.ok) {

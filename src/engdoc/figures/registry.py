@@ -82,22 +82,87 @@ class FigureRegistryManager:
         path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     @classmethod
-    def generate_next_id(cls, workspace_dir: Path) -> str:
-        """Generates the next sequential figure ID (e.g. FIG-001, FIG-002)."""
+    def generate_next_ids(cls, workspace_dir: Path, count: int) -> list[str]:
+        """Generates the next `count` sequential figure IDs by filling vacant gaps first."""
+        if count <= 0:
+            return []
         registry = cls.load_registry(workspace_dir)
-        existing = registry.figures.keys()
-
-        max_num = 0
-        for fig_id in existing:
+        used_numbers: set[int] = set()
+        for fig_id in registry.figures.keys():
             if fig_id.startswith("FIG-"):
-                try:
-                    num = int(fig_id.split("-")[1])
-                    if num > max_num:
-                        max_num = num
-                except ValueError:
-                    pass
+                parts = fig_id.split("-", 1)
+                if len(parts) == 2 and parts[1].isdigit():
+                    used_numbers.add(int(parts[1]))
 
-        return f"FIG-{max_num + 1:03d}"
+        allocated: list[str] = []
+        candidate = 1
+        while len(allocated) < count:
+            if candidate not in used_numbers:
+                allocated.append(f"FIG-{candidate:03d}")
+                used_numbers.add(candidate)
+            candidate += 1
+        return allocated
+
+    @classmethod
+    def generate_next_id(cls, workspace_dir: Path) -> str:
+        """Generates the next figure ID, filling any vacant ID gaps before incrementing."""
+        ids = cls.generate_next_ids(workspace_dir, 1)
+        return ids[0] if ids else "FIG-001"
+
+    @classmethod
+    def replace_figure_asset(
+        cls,
+        workspace_dir: Path,
+        figure_id: str,
+        new_filename: str,
+        new_content: bytes,
+    ) -> FigureMetadata:
+        """Replaces the image asset for an existing figure while strictly preserving ID and metadata."""
+        from engdoc.figures.converter import FigureConverter
+
+        registry = cls.load_registry(workspace_dir)
+        if figure_id not in registry.figures:
+            raise KeyError(f"Figure [{figure_id}] not found in registry.")
+
+        fig = registry.figures[figure_id]
+        figures_dir = workspace_dir / "assets" / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_filename = Path(new_filename).name
+        dest_file = figures_dir / safe_filename
+
+        old_source_path = workspace_dir / fig.source if fig.source else None
+        old_compiled_path = workspace_dir / fig.compiled_asset if fig.compiled_asset else None
+
+        # Write new content to destination file
+        dest_file.write_bytes(new_content)
+
+        # If source filename changed, remove the stale old source file
+        if (
+            old_source_path
+            and old_source_path.resolve() != dest_file.resolve()
+            and old_source_path.is_file()
+        ):
+            try:
+                old_source_path.unlink()
+            except Exception:
+                pass
+
+        # Invalidate old compiled cache file
+        if old_compiled_path and old_compiled_path.is_file():
+            try:
+                old_compiled_path.unlink()
+            except Exception:
+                pass
+
+        fig.source = f"assets/figures/{safe_filename}".replace("\\", "/")
+        fig.source_hash = compute_sha256(dest_file)
+        fig.compiled_asset = None  # Force re-compilation
+
+        # Pre-compile the new asset and save registry
+        FigureConverter.ensure_compiled_asset(workspace_dir, fig)
+        cls.save_registry(workspace_dir, registry)
+        return fig
 
     @classmethod
     def register_figure(
