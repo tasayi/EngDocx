@@ -273,7 +273,14 @@ def cli_serve(args: argparse.Namespace) -> int:
         loop.call_later(1.0, lambda: webbrowser.open(url))
 
     try:
-        uvicorn.run("engdoc.api.app:create_app", factory=True, host=host, port=port)
+        uvicorn.run(
+            "engdoc.api.app:create_app",
+            factory=True,
+            host=host,
+            port=port,
+            log_level="warning",
+            access_log=False,
+        )
         return 0
     except KeyboardInterrupt:
         print("\n[INFO] EngDoc server shut down cleanly.")

@@ -29,7 +29,9 @@ def _check_cli_version(command: list[str]) -> str | None:
             capture_output=True,
             text=True,
             timeout=5,
-            check=False
+            check=False,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode == 0:
             first_line = proc.stdout.strip().splitlines()
@@ -98,8 +100,8 @@ def check_libreoffice() -> ToolStatus:
             required=False,
             details="Optional. Used for headless PDF generation and document previews."
         )
-    ver = _check_cli_version([path, "--version"])
-    return ToolStatus(name="LibreOffice", available=True, path=path, version=ver, required=False)
+    # Running soffice would start a process that can write to the server console
+    return ToolStatus(name="LibreOffice", available=True, path=path, required=False)
 
 def check_word_com() -> ToolStatus:
     if sys.platform != "win32":

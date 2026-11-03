@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from engdoc.api.routes_compile import router as compile_router
@@ -60,6 +60,10 @@ def create_app() -> FastAPI:
                 return FileResponse(index_path)
             return FileResponse(settings.FRONTEND_DIR / "index.html")
 
+        @app.get("/favicon.ico", include_in_schema=False)
+        async def favicon() -> Response:
+            return Response(status_code=204)
+
     return app
 
 app = create_app()
@@ -68,7 +72,8 @@ def main() -> None:
     """CLI runner to launch the EngDoc application server."""
     print(f"Starting {settings.APP_NAME} v{settings.VERSION} on http://{settings.HOST}:{settings.PORT}")
     uvicorn.run(
-        "engdoc.api.app:app",
+        "engdoc.apiwarning",
+        access_log= "Falseapp",
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
