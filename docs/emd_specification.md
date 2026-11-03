@@ -37,25 +37,34 @@ Layout directives control physical page geometry and column formatting for the e
 ### 3.1 Block Directive (`@section ... @end`)
 
 ```markdown
+# 1. Executive Summary
+Standard full-width single-column narrative.
+
 @section
-  orientation: landscape
-  page: A4
+  type: continuous
   columns: 2
-  margin: 20mm
 @end
 
-# 3. High-Density Schematics & Component Tables
+### Key Performance Metrics
+- Dynamic column 1 text...
 
-Content in this section is formatted in landscape with a 2-column layout.
+### Subsystem Verification
+- Dynamic column 2 text...
 
 @section
-  orientation: portrait
-  page: A4
+  type: continuous
   columns: 1
 @end
+
+Back to standard single-column text on the same page.
 ```
 
 #### Directive Parameters
+- `type` / `break_type`: Section transition break type:
+  - `continuous`: Starts the new section on the **same page** (`<w:type w:val="continuous"/>`), ideal for multi-column breakouts.
+  - `next_page` (default): Inserts a normal page-advancing section break (`<w:type w:val="nextPage"/>`).
+  - `even_page`: Starts the new section on the next even-numbered page.
+  - `odd_page`: Starts the new section on the next odd-numbered page.
 - `orientation`: `portrait` (default) | `landscape`
 - `page`: `A4` (default) | `A3` | `Letter` | `Legal` | `custom(width, height)`
 - `columns`: `1` (default) | `2` | `3`
@@ -69,10 +78,12 @@ For inline convenience, single-line shorthand directives are supported:
 - `@layout portrait`
 - `@layout two-column`
 - `@layout single-column`
+- `@layout continuous-two-column`
 
 ### 3.3 Page and Section Breaks
-- `@pagebreak`: Injects a page break (`<w:br w:type="page"/>`) without altering section geometry or headers/footers.
+- `@pagebreak`: Injects an explicit page break (`<w:br w:type="page"/>`) without altering section geometry or headers/footers.
 - `@sectionbreak`: Injects an explicit Word section break (`<w:sectPr>`), initiating a new section that inherits or redefines layout properties.
+- `@section ... @end` with `type: continuous`: Injects a continuous section transition preserving the current page.
 
 ---
 
@@ -83,17 +94,23 @@ Figures are referenced by logical IDs rather than hardcoded file paths. The figu
 ```markdown
 @figure FIG-001
   width: 16cm
+  height: auto
   alignment: center
   caption: "Overall receiver front-end block diagram."
-  placement: inline
+  placement: figure
 @end
 ```
 
+### Sequential ID Generation & Gap-Filling
+- Figures uploaded or registered via the Figure Manager are assigned canonical IDs (`FIG-001`, `FIG-002`, ...).
+- **Gap-Filling Reallocation**: If an existing figure (e.g. `FIG-005` out of 10 figures) is deleted, the ID allocation engine automatically reuses the vacant slot (`FIG-005`) for the next imported figure before incrementing beyond the maximum number.
+- **1-to-1 Figure Asset Replacement**: Existing figure image files can be replaced directly via the Figure Manager toolbar (`🔄 Replace Image(s)...`) or the API. IDs, captions, dimensions, alignment, and document references remain completely unchanged.
+
 ### Supported Parameters
 - `width`: Dimensions in `cm`, `mm`, `in`, `px`, or `%` (e.g. `15cm`, `100%`).
-- `height`: Optional explicit height (aspect ratio preserved if omitted).
-- `alignment`: `left` | `center` (default) | `right`
-- `caption`: Descriptive caption text.
+- `height`: Optional explicit height (aspect ratio is preserved automatically if omitted or set to `auto`).
+- `alignment`: `left` | `center` (default) | `right` (aligns both the image drawing and the caption paragraph).
+- `caption`: Descriptive caption text. During DOCX compilation, captions are formatted as native Word `Caption` styles with automated dynamic `SEQ Figure \* ARABIC` fields.
 - `placement`: `inline` (in text flow) | `figure` (floating block).
 
 ---

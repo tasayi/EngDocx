@@ -78,12 +78,72 @@ Atomically packages and saves the active project workspace back into the `.mdoc`
 
 ### `GET /api/figures/{session_id}`
 Lists all registered figures from `metadata/figures.yaml`.
+- **Response `200 OK`**:
+  ```json
+  {
+    "figures": [
+      {
+        "id": "FIG-001",
+        "source": "assets/figures/antenna.svg",
+        "caption": "Phased-array antenna architecture.",
+        "width": "16cm",
+        "height": "auto",
+        "alignment": "center",
+        "placement": "figure",
+        "format": "emf",
+        "source_hash": "a1b2c3d4...",
+        "compiled_asset": "assets/figures/.cache/FIG-001.emf"
+      }
+    ]
+  }
+  ```
 
 ### `POST /api/figures/{session_id}/upload`
-Uploads a vector SVG or raster image file into `figures/`, calculates SHA-256 hash, and generates sequential ID (`FIG-001`, `FIG-002`, etc.).
+Uploads a vector (SVG) or raster (PNG/JPG) figure asset into `assets/figures/`, computes its SHA-256 hash, compiles cached assets in `.cache/`, and registers metadata in `metadata/figures.yaml`.
+- **Form Data**:
+  - `file`: Image file (`.svg`, `.png`, `.jpg`, `.jpeg`).
+  - `caption`: Optional descriptive caption string.
+  - `width`: Display width in cm/mm/in/px (default: `"16cm"`).
+  - `figure_id`: Optional explicit ID. If omitted, the **gap-filling allocator** reclaims the lowest vacant sequential ID (e.g. `FIG-005` if 5 of 10 was deleted) before incrementing past the highest allocated ID.
+- **Response `201 Created`**: Returns `FigureMetadata` model.
+
+### `POST /api/figures/{session_id}/replace`
+Directly replaces existing figure assets with newly uploaded files while preserving IDs, captions, dimensions, alignment, and document references.
+- **Form Data**:
+  - `target_ids`: List of target figure IDs to replace (e.g. `["FIG-001", "FIG-005"]`).
+  - `files`: Replacement image files.
+- **Validation**:
+  - **Strict Count Parity**: Number of target IDs must exactly equal the number of files ($N_{\text{selected}} == N_{\text{files}}$). Returns HTTP 400 with a detailed error on count mismatch.
+  - **Deterministic Ordering**: Target IDs are sorted in ascending numeric ID order prior to pairing with uploaded files.
+  - **Cache Purging**: Automatically unlinks all matching `.cache/{figure_id}.*` compiled assets and stale source files to ensure clean re-conversion.
+- **Response `200 OK`**:
+  ```json
+  {
+    "updated_figures": [ ... ],
+    "success": true,
+    "count": 2
+  }
+  ```
 
 ### `GET /api/figures/{session_id}/{fig_id}/preview`
-Serves converted image asset or source graphic for in-browser rendering.
+Serves the figure file (SVG or image) for thumbnail or preview display.
+- **Query Parameter**: `?v={source_hash}` (optional cache-busting version token).
+- **Response Headers**:
+  - `Cache-Control: no-cache, no-store, must-revalidate, max-age=0`
+  - `Pragma: no-cache`
+  - `Expires: 0`
+
+### `PUT /api/figures/{session_id}/{figure_id}/rename`
+Renames a figure ID and/or updates its caption, updating compiled cache files atomically.
+- **Request Body**: `{"new_id": "FIG-010", "caption": "Updated caption"}`
+
+### `DELETE /api/figures/{session_id}/{figure_id}`
+Unregisters a figure and deletes its source asset and `.cache/` compiled entries.
+
+### `POST /api/figures/{session_id}/batch-delete`
+Batch deletes multiple figures from the registry and disk.
+- **Request Body**: `{"figure_ids": ["FIG-001", "FIG-002"]}`
+- **Response `200 OK`**: `{"deleted_count": 2, "success": true}`
 
 ---
 
@@ -171,24 +231,34 @@ Inspects existing Word `.docx` files via multipart upload or session/disk path.
   ```
 
 ### `POST /api/documents/patch/preview`
-Dry-run preview of a patch operation validating anchor presence and element counts.
-
-### `POST /api/documents/patch`
-Surgically injects compiled EMD elements into a target Word document non-destructively.
+Dry-run preview and side-by-side comparison of a patch operation validating target anchors, section boundaries, and element counts.
 - **Request Body**:
   ```json
   {
     "session_id": "...",
     "target_document_path": "corporate_spec.docx",
-    "action": "INSERT_BEFORE",
+    "action": "REPLACE",
     "target": {
-      "anchor_type": "BOOKMARK",
-      "anchor_name": "BM_EXEC_SUMMARY"
+      "anchor_type": "HEADING",
+      "anchor_name": "3. Thermal Design Requirements",
+      "scope": "complete_section",
+      "replace_heading_title": true
     },
-    "content_markdown": "# 0. Mission Preamble\n\nPreliminary context.",
-    "output_filename": "Corporate_Spec_Patched.docx"
+    "content_markdown": "## 3. Revised Thermal Requirements\n\nUpdated temperature ranges."
   }
   ```
+- **Response `200 OK`**: Returns dry-run diff preview with original elements count, replacement elements count, and text extracts for side-by-side comparison.
+
+### `POST /api/documents/patch`
+Surgically modifies or replaces elements within a target Word document non-destructively.
+- **Actions**: `INSERT_BEFORE`, `INSERT_AFTER`, `REPLACE`, `APPEND`.
+- **Target Anchors**:
+  - `anchor_type`: `HEADING` | `BOOKMARK` | `CONTENT_CONTROL` | `DOCUMENT_END`.
+  - `scope` (for `HEADING` targets):
+    - `complete_section`: Replaces the target heading and all paragraphs, tables, drawings, and subsections until the next heading of equal or higher hierarchy.
+    - `range`: Replaces from target heading through a specified boundary ending heading.
+    - `single_node`: Modifies only the heading paragraph node.
+  - `replace_heading_title`: Boolean indicating whether to replace the original heading text with the first heading from the replacement Markdown.
 - **Response `200 OK`**:
   ```json
   {
@@ -196,8 +266,8 @@ Surgically injects compiled EMD elements into a target Word document non-destruc
     "original_filename": "corporate_spec.docx",
     "patched_filename": "Corporate_Spec_Patched.docx",
     "download_url": "/api/compile/download/{session_id}/Corporate_Spec_Patched.docx",
-    "action": "INSERT_BEFORE",
-    "target_anchor": "BM_EXEC_SUMMARY",
-    "stats": { "elements_inserted": 2, "paragraphs_inserted": 2 }
+    "action": "REPLACE",
+    "target_anchor": "3. Thermal Design Requirements",
+    "stats": { "elements_inserted": 8, "paragraphs_inserted": 6, "drawings": 1 }
   }
   ```

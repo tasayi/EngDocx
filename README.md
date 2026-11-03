@@ -97,31 +97,38 @@ uv run engdoc patch base_spec.docx \
 
 EngDoc extends standard GitHub Flavored Markdown with engineering directives:
 
-### Multi-Section Layouts & Orientations
+### Multi-Section Layouts & Continuous Columns
+EngDoc supports arbitrary page orientations, margin overrides, and continuous multi-column breakouts on the same physical page:
+
 ```markdown
-::: section { orientation: portrait, page_size: a4, columns: 1 }
-# 1. Introduction
-Standard single-column portrait narrative.
-:::
+# 1. Executive Summary
+Standard full-width single-column narrative.
+
+@section
+  type: continuous
+  columns: 2
+@end
+
+### Key Performance Metrics
+- Dynamic dual-column layout begins on the same page.
+
+### Subsystem Verification
+- Seamless column flow without premature page ejections.
+
+@section
+  type: continuous
+  columns: 1
+@end
+
+# 2. Panoramic Schematics
 
 @section
   orientation: landscape
   page: A4
-  columns: 2
-@end
-
-# 2. Wide Data Matrices
-Panoramic dual-column layout for wide schematic tables.
-
-| Parameter | Min | Nom | Max | Unit |
-|---|---|---|---|---|
-| Bus Voltage | 26.0 | 28.0 | 32.0 | V |
-
-@section
-  orientation: portrait
-  page: A4
   columns: 1
 @end
+
+Wide schematic diagram or extensive tabular matrix in landscape orientation.
 ```
 
 ### Native Word Equations (OMML)
@@ -131,12 +138,31 @@ $$
 P_{\text{rad}} = \epsilon \sigma A \left( T_1^4 - T_2^4 \right)
 $$
 
-### Vector Figure Embedding
+### Vector Figure Embedding & Management
 ```markdown
 @figure FIG-001
   caption: "Satellite Power and Telemetry Bus Architecture"
   width: "150mm"
+  alignment: center
 @end
+```
+- **Sequential Gap-Filling**: Deleting an intermediate figure (e.g. `FIG-005` out of 10) reclaims its slot for the next imported figure before incrementing.
+- **Direct 1-to-1 Replacement**: Select figure(s) and use **🔄 Replace Image(s)...** in the Figure Manager toolbar to replace image assets while preserving IDs, captions, dimensions, alignment, and markdown references.
+- **Real-Time Live Preview**: Browser and HTML preview cache invalidation via dynamic query tokens (`?v={hash}`) ensures newly replaced figures render immediately.
+- **Robust Sizing Calculation**: Safe integer dimension scaling prevents numeric overflow (`integer division result too large for a float`) on complex drawing extents.
+
+### Surgical Word Section Patching
+Inspect corporate Word documents and surgically replace entire sections or ranges without altering styles or headers:
+
+```bash
+# Surgical section replacement via CLI / API
+uv run engdoc patch base_spec.docx \
+  --action REPLACE \
+  --anchor-type HEADING \
+  --anchor-name "3. Thermal Design Requirements" \
+  --scope complete_section \
+  --snippet "## 3. Revised Thermal Requirements\n\nUpdated temperature ranges." \
+  --output patched_spec.docx
 ```
 
 ---

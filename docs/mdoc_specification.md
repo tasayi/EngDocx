@@ -86,7 +86,45 @@ build:
 
 ---
 
-## 4. Security & Archive Constraints
+## 4. The Figure Registry (`metadata/figures.yaml`)
+
+The figure registry indexes all figures in the project workspace, tracking vector assets, cached conversions, and layout properties.
+
+### 4.1 Schema Example
+
+```yaml
+figures:
+  FIG-001:
+    id: "FIG-001"
+    source: "assets/figures/antenna.svg"
+    caption: "Phased-array antenna architecture."
+    width: "16cm"
+    height: "auto"
+    alignment: "center"
+    placement: "figure"
+    format: "emf"
+    source_hash: "3b08b52c03567..."
+    compiled_asset: "assets/figures/.cache/FIG-001.emf"
+  FIG-002:
+    id: "FIG-002"
+    source: "assets/figures/schematic.png"
+    caption: "Receiver front-end schematic."
+    width: "14cm"
+    alignment: "left"
+    format: "png"
+    source_hash: "9f8a123e..."
+    compiled_asset: "assets/figures/.cache/FIG-002.png"
+```
+
+### 4.2 Gap-Filling ID Reallocation Semantics
+- Figures receive canonical sequential identifiers (`FIG-001`, `FIG-002`, ...).
+- When a figure is deleted, its numeric slot is made vacant in `figures.yaml`.
+- The ID generator automatically reclaims vacant slots in ascending order before allocating numbers greater than the maximum current figure ID.
+- **Direct Replacement**: When a figure's image is replaced, the source file and hash are updated while preserving `id`, `caption`, `width`, `height`, and `alignment`. Stale compiled files in `assets/figures/.cache/{id}.*` are automatically cleared.
+
+---
+
+## 5. Security & Archive Constraints
 
 1. **Path Traversal Protection (`ZipSlip`)**:
    - Extractors must inspect every entry's target path. Any entry containing relative path components resolving outside the extraction root (`..`, absolute paths, leading slashes) MUST cause extraction to abort immediately.

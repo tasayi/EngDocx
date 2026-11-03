@@ -75,21 +75,27 @@ flowchart TD
   - Authoritative document model: Maintains a structured AST representing sections, figures, and attributes.
 
 ### 3.3 Figure Subsystem (`engdoc.figures`)
-- **Responsibility**: Maintains the project figure registry (`figures.yaml`), tracks vector sources (SVG, Draw.io), computes content hashes for modification detection, and drives format conversions (EMF for Office 2013, 300 DPI PNG as universal fallback).
+- **Responsibility**: Maintains the project figure registry (`figures.yaml`), tracks vector sources (SVG, Draw.io), computes SHA-256 content hashes for modification detection, drives format conversions (EMF for Office 2013, 300 DPI PNG fallback), and manages figure replacement workflows.
+- **Key Capabilities**:
+  - **Gap-Filling ID Allocation**: Figure IDs are assigned sequentially (`FIG-001`, `FIG-002`, ...). When an intermediate figure is deleted, its vacated numeric slot is prioritized and filled before the counter increments past the highest ID.
+  - **Direct 1-to-1 Replacement**: Replaces existing figure image files with strict count parity validation ($N_{\text{selected}} == N_{\text{files}}$) and deterministic ascending order matching, while preserving figure IDs, captions, dimensions, alignment, and document references.
+  - **Cache Purging & Real-Time Preview**: Replacing an asset purges all matching `.cache/{figure_id}.*` compiled vector/raster assets and invalidates browser caches via dynamic `?v={source_hash}` query parameters and strict `no-store, no-cache` HTTP headers.
 - **Invariants**:
-  - Source files are read-only; conversions are written to an isolated asset cache.
-  - Figures in released DOCX documents are fully embedded.
+  - Source files are read-only; conversions are written to an isolated asset cache (`assets/figures/.cache/`).
+  - Figures in released DOCX documents are fully embedded with ECMA-376 schema conformance.
 
 ### 3.4 Compiler Subsystem (`engdoc.compiler`)
 - **Responsibility**: Orchestrates the multi-stage document generation pipeline:
   1. Resolves markdown content and linked figures.
   2. Synthesizes intermediate Pandoc AST with custom Lua filters.
   3. Executes Pandoc against selected reference `.docx` templates.
-  4. Post-processes generated OpenXML (`lxml`) to inject Word section break properties (`w:sectPr`, `w:pgSz`, `w:pgMar`, `w:cols`).
-  5. Renders optional PDF via LibreOffice headless or Word COM.
+  4. Post-processes generated OpenXML (`lxml`) to inject Word section break properties (`w:sectPr`, `w:pgSz`, `w:pgMar`, `w:cols`, `w:type`).
+  5. Formats figure drawings with alignment (`left`, `center`, `right`), keepNext constraints, and native dynamic Word `Caption` styles with automated dynamic `SEQ Figure \* ARABIC` fields.
+  6. Renders optional PDF via LibreOffice headless or Word COM.
 
 ### 3.5 Document Inspection & Patching Subsystem (`engdoc.documents`)
-- **Responsibility**: Inspects existing corporate Word documents (`.docx`), exposes document outlines (headings, bookmarks, content controls), and performs targeted insertions (`INSERT BEFORE`, `INSERT AFTER`, `REPLACE`, `APPEND`).
+- **Responsibility**: Inspects existing corporate Word documents (`.docx`), exposes document outlines (headings, bookmarks, content controls), and performs targeted surgical insertions and replacements (`INSERT_BEFORE`, `INSERT_AFTER`, `REPLACE`, `APPEND`).
+- **Section-Level Replacement**: Supports `complete_section` (replaces heading and all enclosed content until the next heading of equal/higher hierarchy), `range` (target heading to end boundary), and `single_node` scopes with a side-by-side dry-run comparison diff viewer.
 - **Invariants**:
   - Non-destructive: Original documents are never overwritten directly; outputs are written to timestamped files.
   - High fidelity: On Windows, uses Word 2013 COM automation to maintain complex styling, macros, and existing headers/footers; on Linux, uses scoped OpenXML DOM manipulation.
@@ -118,4 +124,18 @@ flowchart TD
   1. The figure subsystem maintains source files in SVG format.
   2. Assets are converted to EMF (Enhanced Metafile) via Inkscape CLI (`--export-type=emf`).
   3. If EMF conversion fails or Inkscape is not present, generate high-resolution PNG (300+ DPI) with physical dimension metadata (`w:extent` in OpenXML) so visual resolution is never compromised.
+
+### Risk 4: Continuous Multi-Column Section Distribution on the Same Physical Page
+- *Challenge*: In standard Word processing, injecting a section break to switch between single-column and multi-column layouts defaults to `nextPage`, forcing unwanted blank spaces and page ejections.
+- *Solution*:
+  1. EMD `@section` supports `type: continuous` (or `break_type: continuous`).
+  2. The OpenXML post-processor configures paragraph-level section properties with `<w:type w:val="continuous"/>`, allowing Word to switch between single-column narrative and 2- or 3-column breakout text smoothly on the same page.
+
+### Risk 5: Word OpenXML Drawing Extent Numeric Overflow in Headless Builds
+- *Challenge*: Pandoc occasionally emits unconstrained or unsigned 64-bit integer values (`18446744073709551615`) for `<wp:extent cx="..." cy="..."/>` when image intrinsic dimensions cannot be determined. True float division (`cx * old_cy / old_cx`) triggers CPython's `OverflowError: integer division result too large for a float`, aborting compilation.
+- *Solution*:
+  1. `DocxPostprocessor._apply_size_hint` uses safe integer arithmetic `(cx * old_cy) // old_cx`.
+  2. Explicit validation verifies that `old_cx > 0` and `old_cy > 0` and within realistic limits; otherwise it defaults safely to a standard 4:3 aspect ratio (`(cx * 3) // 4`).
+  3. Computed dimensions are strictly clamped within valid Word OpenXML limits (`10,000` to `36,000,000` EMUs, approximately 0.28 mm to 100 cm).
+  4. Extent manipulation is wrapped in protective exception handlers so drawing hint processing never crashes the document compilation pipeline.
 
