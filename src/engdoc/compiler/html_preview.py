@@ -10,7 +10,7 @@ from typing import Any
 from engdoc.compiler.runner import PandocRunner
 from engdoc.figures.registry import FigureRegistryManager
 from engdoc.figures.service import format_figure_caption
-from engdoc.markup.parser import EMDParser, parse_section_params
+from engdoc.markup.parser import EMDParser, convert_tsv_tables, parse_section_params
 
 
 @dataclass
@@ -35,7 +35,7 @@ class HTMLPreviewGenerator:
     ) -> PreviewPayload:
         """Converts EMD source text into high-fidelity HTML for live preview."""
         emd_doc = EMDParser.parse(emd_text)
-        content = emd_doc.body_markdown
+        content = convert_tsv_tables(emd_doc.body_markdown)
 
         # 1. Transform @pagebreak to visual divider
         content = re.sub(

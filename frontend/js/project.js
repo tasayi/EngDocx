@@ -885,7 +885,7 @@ export function initProjectManager() {
         } else if (type === 'pagebreak') {
           insertSnippet('\n@pagebreak\n');
         } else if (type === 'table') {
-          insertSnippet('\n| Item | Description | Nominal | Tolerance |\n|---|---|---|---|\n| 1 | Signal Channel | 12.0 V | ±0.5 V |\n');
+          insertSnippet('\nTable: Table caption\n\n| Item | Description | Nominal | Tolerance |\n|---|---|---|---|\n| 1 | Signal Channel | 12.0 V | ±0.5 V |\n');
         } else if (type === 'equation') {
           insertSnippet('\n$$\nq_{\\text{rad}} = \\epsilon \\sigma \\left( T_1^4 - T_2^4 \\right)\n$$\n');
         }

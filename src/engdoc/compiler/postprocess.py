@@ -16,10 +16,13 @@ MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 NSMAP = {"w": W_NS, "wp": WP_NS, "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
-SEQ_FIGURE_INSTR = " SEQ Figure \\* ARABIC "
 CAPTION_PREFIX_RE = re.compile(
     r"^(Figure(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE,
+)
+TABLE_CAPTION_PREFIX_RE = re.compile(
+    r"^(Table\s+[A-Za-z0-9_\-\.]*\s*[:\.\-]\s*)(.*)$",
+    re.IGNORECASE | re.DOTALL,
 )
 
 # ECMA-376 strict sequence for w:pPr child elements
@@ -103,13 +106,15 @@ class DocxPostprocessor:
             pPr.append(c)
 
     @classmethod
-    def _make_caption_runs(cls, p: etree.Element, number: int) -> None:
-        """Rewrites a caption as 'Figure <SEQ field>: description' so numbering is automatic."""
+    def _make_caption_runs(
+        cls, p: etree.Element, number: int, label: str = "Figure"
+    ) -> None:
+        """Rewrites a caption as '<label> <SEQ field>: description' so numbering is automatic."""
         full_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
-        m = CAPTION_PREFIX_RE.match(full_text)
-        if not m:
-            return
-        desc = m.group(2).strip()
+        m = (TABLE_CAPTION_PREFIX_RE if label == "Table" else CAPTION_PREFIX_RE).match(
+            full_text
+        )
+        desc = (m.group(2) if m else full_text).strip()
 
         for child in list(p):
             if child.tag != f"{{{W_NS}}}pPr":
@@ -121,30 +126,40 @@ class DocxPostprocessor:
             t.set(f"{{{XML_NS}}}space", "preserve")
             t.text = text
 
-        add_run(p, "Figure ")
+        add_run(p, f"{label} ")
         fld = etree.SubElement(p, f"{{{W_NS}}}fldSimple")
-        fld.set(f"{{{W_NS}}}instr", SEQ_FIGURE_INSTR)
+        fld.set(f"{{{W_NS}}}instr", f" SEQ {label} \\* ARABIC ")
         add_run(fld, str(number))
         add_run(p, f": {desc}" if desc else "")
 
+    @staticmethod
+    def _seq_label(instr: str | None) -> str | None:
+        for label in ("Figure", "Table"):
+            if instr and f"SEQ {label}" in instr:
+                return label
+        return None
+
     @classmethod
     def renumber_figure_fields(cls, body: etree.Element) -> None:
-        """Refreshes cached results of every 'SEQ Figure' field in document order."""
-        counter = 0
+        """Refreshes cached results of every 'SEQ Figure' / 'SEQ Table' field in document order."""
+        counters = {"Figure": 0, "Table": 0}
         for p in body.iter(f"{{{W_NS}}}p"):
             for fld in p.iter(f"{{{W_NS}}}fldSimple"):
-                if "SEQ Figure" in (fld.get(f"{{{W_NS}}}instr") or ""):
-                    counter += 1
+                label = cls._seq_label(fld.get(f"{{{W_NS}}}instr"))
+                if label:
+                    counters[label] += 1
                     for t in fld.iter(f"{{{W_NS}}}t"):
-                        t.text = str(counter)
+                        t.text = str(counters[label])
                         break
 
             runs = list(p.iter(f"{{{W_NS}}}r"))
             for i, r in enumerate(runs):
                 instr = r.find(f"{{{W_NS}}}instrText")
-                if instr is None or "SEQ Figure" not in (instr.text or ""):
+                label = cls._seq_label(instr.text if instr is not None else None)
+                if not label:
                     continue
-                counter += 1
+                counters[label] += 1
+                counter = counters[label]
                 separated = False
                 for nxt in runs[i + 1 :]:
                     fc = nxt.find(f"{{{W_NS}}}fldChar")
@@ -184,13 +199,15 @@ class DocxPostprocessor:
                 tmp_docx_path, "w", compression=zipfile.ZIP_DEFLATED
             ) as z_out:
                 names = set(z_in.namelist())
-                caption_style = cls._find_caption_style(
-                    z_in.read("word/styles.xml") if "word/styles.xml" in names else b""
-                )
+                styles_bytes = z_in.read("word/styles.xml") if "word/styles.xml" in names else b""
+                caption_style = cls._find_caption_style(styles_bytes)
+                has_table_grid = b'w:styleId="TableGrid"' in styles_bytes
                 for item in z_in.infolist():
                     data = z_in.read(item.filename)
                     if item.filename == "word/document.xml":
-                        data = cls._process_document_xml(data, current_layout, caption_style)
+                        data = cls._process_document_xml(
+                            data, current_layout, caption_style, has_table_grid
+                        )
                     elif item.filename.endswith(".rels"):
                         data = cls._drop_dangling_rels(item.filename, data, names)
                     z_out.writestr(item, data)
@@ -200,6 +217,119 @@ class DocxPostprocessor:
         finally:
             if tmp_docx_path.exists():
                 tmp_docx_path.unlink()
+
+    @classmethod
+    def _format_tables(cls, body: etree.Element, has_table_grid: bool) -> None:
+        """Applies grid borders, left/centre cell alignment, zero paragraph spacing and 0.3in min row height."""
+        w = f"{{{W_NS}}}"
+        for tbl in body.iter(f"{w}tbl"):
+            tblPr = tbl.find(f"{w}tblPr")
+            if tblPr is None:
+                tblPr = etree.Element(f"{w}tblPr")
+                tbl.insert(0, tblPr)
+
+            if has_table_grid:
+                style = tblPr.find(f"{w}tblStyle")
+                if style is None:
+                    style = etree.SubElement(tblPr, f"{w}tblStyle")
+                style.set(f"{w}val", "TableGrid")
+
+            borders = tblPr.find(f"{w}tblBorders")
+            if borders is not None:
+                tblPr.remove(borders)
+            borders = etree.SubElement(tblPr, f"{w}tblBorders")
+            for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                b = etree.SubElement(borders, f"{w}{side}")
+                b.set(f"{w}val", "single")
+                b.set(f"{w}sz", "4")
+                b.set(f"{w}space", "0")
+                b.set(f"{w}color", "auto")
+
+            order = [
+                "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize",
+                "tblStyleColBandSize", "tblW", "jc", "tblCellSpacing", "tblInd", "tblBorders",
+                "shd", "tblLayout", "tblCellMar", "tblLook", "tblCaption", "tblDescription",
+            ]
+            kids = sorted(
+                list(tblPr),
+                key=lambda e: order.index(etree.QName(e).localname)
+                if etree.QName(e).localname in order
+                else len(order),
+            )
+            for k in list(tblPr):
+                tblPr.remove(k)
+            for k in kids:
+                tblPr.append(k)
+
+            for tr in tbl.findall(f"{w}tr"):
+                trPr = tr.find(f"{w}trPr")
+                if trPr is None:
+                    trPr = etree.Element(f"{w}trPr")
+                    pos = 1 if tr.find(f"{w}tblPrEx") is not None else 0
+                    tr.insert(pos, trPr)
+                height = trPr.find(f"{w}trHeight")
+                if height is None:
+                    height = etree.Element(f"{w}trHeight")
+                    hdr = trPr.find(f"{w}tblHeader")
+                    if hdr is not None:
+                        hdr.addprevious(height)
+                    else:
+                        trPr.append(height)
+                height.set(f"{w}val", "432")
+                height.set(f"{w}hRule", "atLeast")
+
+                for tc in tr.findall(f"{w}tc"):
+                    tcPr = tc.find(f"{w}tcPr")
+                    if tcPr is None:
+                        tcPr = etree.Element(f"{w}tcPr")
+                        tc.insert(0, tcPr)
+                    v = tcPr.find(f"{w}vAlign")
+                    if v is None:
+                        v = etree.SubElement(tcPr, f"{w}vAlign")
+                    v.set(f"{w}val", "center")
+
+                    for p in tc.iter(f"{w}p"):
+                        pPr = p.find(f"{w}pPr")
+                        if pPr is None:
+                            pPr = etree.Element(f"{w}pPr")
+                            p.insert(0, pPr)
+                        spacing = pPr.find(f"{w}spacing")
+                        if spacing is None:
+                            spacing = etree.SubElement(pPr, f"{w}spacing")
+                        spacing.set(f"{w}after", "0")
+                        jc = pPr.find(f"{w}jc")
+                        if jc is None:
+                            jc = etree.SubElement(pPr, f"{w}jc")
+                        jc.set(f"{w}val", "left")
+                        cls._sort_pPr(pPr)
+
+    @classmethod
+    def _format_table_captions(cls, body: etree.Element, caption_style: str) -> None:
+        """Turns the paragraph above a table ('Table: ...' or 'Table N: ...') into a numbered caption."""
+        w = f"{{{W_NS}}}"
+        number = 0
+        for tbl in body.findall(f"{w}tbl"):
+            prev = tbl.getprevious()
+            if prev is None or prev.tag != f"{w}p":
+                continue
+            pStyle = prev.find(f"{w}pPr/{w}pStyle")
+            style_val = pStyle.get(f"{w}val") if pStyle is not None else ""
+            text = "".join(t.text or "" for t in prev.xpath(".//w:t", namespaces=NSMAP))
+            if style_val != "TableCaption" and not TABLE_CAPTION_PREFIX_RE.match(text.strip()):
+                continue
+
+            pPr = prev.find(f"{w}pPr")
+            if pPr is None:
+                pPr = etree.Element(f"{w}pPr")
+                prev.insert(0, pPr)
+            if pStyle is None:
+                pStyle = etree.SubElement(pPr, f"{w}pStyle")
+            pStyle.set(f"{w}val", caption_style)
+            if pPr.find(f"{w}keepNext") is None:
+                etree.SubElement(pPr, f"{w}keepNext")
+            cls._sort_pPr(pPr)
+            number += 1
+            cls._make_caption_runs(prev, number, label="Table")
 
     @classmethod
     def _find_caption_style(cls, styles_xml: bytes) -> str:
@@ -241,6 +371,7 @@ class DocxPostprocessor:
         xml_bytes: bytes,
         initial_layout: SectionLayout,
         caption_style: str = "Caption",
+        has_table_grid: bool = False,
     ) -> bytes:
         """Transforms word/document.xml with section properties and figure styling."""
         root = etree.fromstring(xml_bytes)
@@ -324,6 +455,9 @@ class DocxPostprocessor:
                         cls._sort_pPr(next_pPr)
                         figure_number += 1
                         cls._make_caption_runs(next_p, figure_number)
+
+        cls._format_tables(body, has_table_grid)
+        cls._format_table_captions(body, caption_style)
 
         # 2. Extract terminal sectPr to use as template for headers/footers
         terminal_sect_pr = body.find(f"{{{W_NS}}}sectPr")

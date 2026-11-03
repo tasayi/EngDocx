@@ -72,6 +72,47 @@ def parse_section_params(header: str | None, body_text: str | None) -> dict[str,
     return params
 
 
+def convert_tsv_tables(text: str) -> str:
+    """Turns blocks of tab-separated lines (e.g. pasted from Excel) into pipe tables."""
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        if in_fence or "\t" not in line.strip("\t\r ") or line.lstrip().startswith("|"):
+            out.append(line)
+            i += 1
+            continue
+
+        block: list[list[str]] = []
+        j = i
+        while j < len(lines) and "\t" in lines[j].strip("\t\r "):
+            block.append([c.strip() for c in lines[j].rstrip("\r").split("\t")])
+            j += 1
+        if len(block) < 2:
+            out.append(line)
+            i += 1
+            continue
+
+        ncols = max(len(r) for r in block)
+        rows = [r + [""] * (ncols - len(r)) for r in block]
+
+        def fmt(r: list[str]) -> str:
+            return "| " + " | ".join(c.replace("|", "\\|") for c in r) + " |"
+
+        if out and out[-1].strip():
+            out.append("")
+        out.append(fmt(rows[0]))
+        out.append("|" + "|".join(["---"] * ncols) + "|")
+        out.extend(fmt(r) for r in rows[1:])
+        out.append("")
+        i = j
+    return "\n".join(out)
+
+
 class EMDParser:
     """Parser for EMD documents with YAML frontmatter and custom directives."""
 
@@ -192,7 +233,7 @@ class EMDParser:
         figure_resolver: Any = None,
     ) -> str:
         """Pre-processes EMD body text into standard Pandoc-compatible markdown with directives."""
-        content = emd_doc.body_markdown
+        content = convert_tsv_tables(emd_doc.body_markdown)
 
         # Helper for OpenXML section marker
         def make_section_marker(params: dict[str, Any]) -> str:
