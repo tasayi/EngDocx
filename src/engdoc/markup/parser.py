@@ -12,7 +12,7 @@ from engdoc.markup.models import DirectiveBlock, EMDDocument, FrontmatterMetadat
 # Regex patterns for EMD directives
 FRONTMATTER_REGEX = re.compile(r"^---\s*\n(.*?)\n(?:---|\.\.\.)\s*\n", re.DOTALL)
 BLOCK_DIRECTIVE_REGEX = re.compile(
-    r"^@(?P<type>section|figure)(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+    r"^@(?P<type>section|figure|equation)(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
     re.MULTILINE | re.DOTALL,
 )
 LAYOUT_SHORTHAND_REGEX = re.compile(
@@ -315,6 +315,33 @@ class EMDParser:
         content = re.sub(
             r"^@figure(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
             figure_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+
+        # 5b. Transform @equation blocks into markdown display math and caption
+        def equation_repl(m: re.Match) -> str:
+            body_text = m.group("body")
+            caption_raw = ""
+            math_lines = []
+            for line in body_text.splitlines():
+                line_s = line.strip()
+                if line_s.startswith("caption:"):
+                    caption_raw = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("math:"):
+                    math_lines.append(line_s.split(":", 1)[1].strip())
+                elif line_s:
+                    math_lines.append(line_s)
+            math_content = "\n".join(math_lines).strip()
+            if not math_content.startswith("$$"):
+                math_content = f"$$\n{math_content}\n$$"
+            if caption_raw:
+                return f"\n{math_content}\n\nEquation: {caption_raw}\n"
+            return f"\n{math_content}\n"
+
+        content = re.sub(
+            r"^@equation(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            equation_repl,
             content,
             flags=re.MULTILINE | re.DOTALL,
         )

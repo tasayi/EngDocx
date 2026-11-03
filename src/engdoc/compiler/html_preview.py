@@ -199,6 +199,33 @@ class HTMLPreviewGenerator:
             flags=re.MULTILINE | re.DOTALL,
         )
 
+        # 3b. Resolve @equation blocks for preview
+        def equation_preview_repl(m: re.Match) -> str:
+            body_text = m.group("body")
+            caption_raw = ""
+            math_lines = []
+            for line in body_text.splitlines():
+                line_s = line.strip()
+                if line_s.startswith("caption:"):
+                    caption_raw = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("math:"):
+                    math_lines.append(line_s.split(":", 1)[1].strip())
+                elif line_s:
+                    math_lines.append(line_s)
+            math_content = "\n".join(math_lines).strip()
+            if not math_content.startswith("$$"):
+                math_content = f"$$\n{math_content}\n$$"
+            if caption_raw:
+                return f"\n{math_content}\n\nEquation: {caption_raw}\n"
+            return f"\n{math_content}\n"
+
+        content = re.sub(
+            r"^@equation(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            equation_preview_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+
         # 4. Compile markdown to HTML5 via Pandoc
         pandoc_bin = PandocRunner.get_pandoc_bin()
         with tempfile.NamedTemporaryFile(
@@ -244,6 +271,8 @@ class HTMLPreviewGenerator:
                 r'(<img\s+[^>]*?src=["\'])([^"\']+)(["\'])', rewrite_img_src, html_out
             )
 
+        html_out = cls._enhance_preview_equations(html_out)
+
         headings_count = len(re.findall(r"^#{1,6}\s+", content, flags=re.MULTILINE))
         equations_count = len(
             re.findall(r"\$\$.*?\$\$|\$[^\$]+?\$", content, flags=re.DOTALL)
@@ -262,3 +291,85 @@ class HTMLPreviewGenerator:
                 "tables": tables_count,
             },
         )
+
+    @classmethod
+    def _enhance_preview_equations(cls, html: str) -> str:
+        """Wraps display math in .preview-equation with flush-right (N) numbering and styles equation captions."""
+        eq_counter = 0
+        eq_caption_re = re.compile(
+            r"^<p>\s*(?:<strong>)?\s*(Equation(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)(?:</strong>)?\s*</p>$",
+            re.IGNORECASE | re.DOTALL,
+        )
+        display_math_re = re.compile(
+            r"<p>\s*(<span class=\"math display\">.*?</span>)\s*</p>",
+            re.DOTALL,
+        )
+
+        parts = re.split(r"(<p>.*?</p>)", html, flags=re.DOTALL)
+        out: list[str] = []
+        i = 0
+        while i < len(parts):
+            part = parts[i]
+            m_math = display_math_re.match(part)
+            if not m_math:
+                out.append(part)
+                i += 1
+                continue
+
+            math_span = m_math.group(1)
+
+            prev_idx = len(out) - 1
+            while prev_idx >= 0 and not out[prev_idx].strip():
+                prev_idx -= 1
+
+            caption_before = None
+            if prev_idx >= 0:
+                m_cap = eq_caption_re.match(out[prev_idx].strip())
+                if m_cap:
+                    caption_before = (prev_idx, m_cap.group(2).strip())
+
+            next_idx = i + 1
+            while next_idx < len(parts) and not parts[next_idx].strip():
+                next_idx += 1
+
+            caption_after = None
+            if not caption_before and next_idx < len(parts):
+                m_cap = eq_caption_re.match(parts[next_idx].strip())
+                if m_cap:
+                    caption_after = (next_idx, m_cap.group(2).strip())
+
+            eq_counter += 1
+            eq_box = (
+                f'<div class="preview-equation" id="eq-{eq_counter}">'
+                f'<div class="equation-math">{math_span}</div>'
+                f'<div class="equation-number">({eq_counter})</div>'
+                f"</div>"
+            )
+
+            if caption_before:
+                p_idx, desc = caption_before
+                desc_clean = re.sub(r"^</?strong>", "", desc).strip()
+                caption_text = f": {desc_clean}" if desc_clean else ""
+                out[p_idx] = (
+                    f'<div class="preview-caption equation-caption">'
+                    f"<strong>Equation {eq_counter}</strong>{caption_text}</div>"
+                )
+                out.append(eq_box)
+                i += 1
+            elif caption_after:
+                p_idx, desc = caption_after
+                desc_clean = re.sub(r"^</?strong>", "", desc).strip()
+                caption_text = f": {desc_clean}" if desc_clean else ""
+                out.append(eq_box)
+                for k in range(i + 1, next_idx):
+                    out.append(parts[k])
+                out.append(
+                    f'<div class="preview-caption equation-caption">'
+                    f"<strong>Equation {eq_counter}</strong>{caption_text}</div>"
+                )
+                i = next_idx + 1
+            else:
+                out.append(eq_box)
+                i += 1
+
+        return "".join(out)

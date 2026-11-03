@@ -10,18 +10,28 @@ from pathlib import Path
 
 from lxml import etree
 
-from engdoc.compiler.layout import W_NS, SectionLayout
+from engdoc.compiler.layout import PAGE_SIZES_DXA, W_NS, SectionLayout
 
 MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-NSMAP = {"w": W_NS, "wp": WP_NS, "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+NSMAP = {
+    "w": W_NS,
+    "wp": WP_NS,
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "m": M_NS,
+}
 CAPTION_PREFIX_RE = re.compile(
     r"^(Figure(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE,
 )
 TABLE_CAPTION_PREFIX_RE = re.compile(
     r"^(Table\s+[A-Za-z0-9_\-\.]*\s*[:\.\-]\s*)(.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+EQUATION_CAPTION_PREFIX_RE = re.compile(
+    r"^(Equation(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -130,13 +140,20 @@ class DocxPostprocessor:
 
     @classmethod
     def _make_caption_runs(
-        cls, p: etree.Element, number: int, label: str = "Figure"
+        cls,
+        p: etree.Element,
+        number: int,
+        label: str = "Figure",
+        use_curr: bool = False,
     ) -> None:
         """Rewrites a caption as '<label> <SEQ field>: description' so numbering is automatic."""
         full_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
-        m = (TABLE_CAPTION_PREFIX_RE if label == "Table" else CAPTION_PREFIX_RE).match(
-            full_text
-        )
+        if label == "Table":
+            m = TABLE_CAPTION_PREFIX_RE.match(full_text)
+        elif label == "Equation":
+            m = EQUATION_CAPTION_PREFIX_RE.match(full_text)
+        else:
+            m = CAPTION_PREFIX_RE.match(full_text)
         desc = (m.group(2) if m else full_text).strip()
 
         for child in list(p):
@@ -151,37 +168,42 @@ class DocxPostprocessor:
 
         add_run(p, f"{label} ")
         fld = etree.SubElement(p, f"{{{W_NS}}}fldSimple")
-        fld.set(f"{{{W_NS}}}instr", f" SEQ {label} \\* ARABIC ")
+        instr = f" SEQ {label} \\c \\* ARABIC " if use_curr else f" SEQ {label} \\* ARABIC "
+        fld.set(f"{{{W_NS}}}instr", instr)
         add_run(fld, str(number))
         add_run(p, f": {desc}" if desc else "")
 
     @staticmethod
     def _seq_label(instr: str | None) -> str | None:
-        for label in ("Figure", "Table"):
+        for label in ("Figure", "Table", "Equation"):
             if instr and f"SEQ {label}" in instr:
                 return label
         return None
 
     @classmethod
     def renumber_figure_fields(cls, body: etree.Element) -> None:
-        """Refreshes cached results of every 'SEQ Figure' / 'SEQ Table' field in document order."""
-        counters = {"Figure": 0, "Table": 0}
+        """Refreshes cached results of every 'SEQ Figure' / 'SEQ Table' / 'SEQ Equation' field in document order."""
+        counters = {"Figure": 0, "Table": 0, "Equation": 0}
         for p in body.iter(f"{{{W_NS}}}p"):
             for fld in p.iter(f"{{{W_NS}}}fldSimple"):
-                label = cls._seq_label(fld.get(f"{{{W_NS}}}instr"))
+                instr = fld.get(f"{{{W_NS}}}instr") or ""
+                label = cls._seq_label(instr)
                 if label:
-                    counters[label] += 1
+                    if r"\c" not in instr and "\\c" not in instr:
+                        counters[label] += 1
                     for t in fld.iter(f"{{{W_NS}}}t"):
                         t.text = str(counters[label])
                         break
 
             runs = list(p.iter(f"{{{W_NS}}}r"))
             for i, r in enumerate(runs):
-                instr = r.find(f"{{{W_NS}}}instrText")
-                label = cls._seq_label(instr.text if instr is not None else None)
+                instr_elem = r.find(f"{{{W_NS}}}instrText")
+                instr_text = instr_elem.text if instr_elem is not None else ""
+                label = cls._seq_label(instr_text)
                 if not label:
                     continue
-                counters[label] += 1
+                if r"\c" not in instr_text and "\\c" not in instr_text:
+                    counters[label] += 1
                 counter = counters[label]
                 separated = False
                 for nxt in runs[i + 1 :]:
@@ -355,6 +377,172 @@ class DocxPostprocessor:
             cls._make_caption_runs(prev, number, label="Table")
 
     @classmethod
+    def _format_equations(
+        cls,
+        body: etree.Element,
+        caption_style: str,
+        initial_layout: SectionLayout,
+    ) -> None:
+        """Formats display math paragraphs with center/right tabs and right-aligned IEEE (N) numbers,
+        and synchronizes with adjacent equation captions.
+        """
+        w = f"{{{W_NS}}}"
+        m = f"{{{M_NS}}}"
+        current_layout = initial_layout
+        equation_number = 0
+        formatted_captions: set[int] = set()
+
+        def is_eq_caption(elem: etree.Element | None) -> bool:
+            if elem is None or elem.tag != f"{w}p":
+                return False
+            if id(elem) in formatted_captions:
+                return False
+            pStyle = elem.find(f"{w}pPr/{w}pStyle")
+            style_val = pStyle.get(f"{w}val") if pStyle is not None else ""
+            full_txt = "".join(t.text or "" for t in elem.xpath(".//w:t", namespaces=NSMAP)).strip()
+            if style_val in ("EquationCaption", "Caption"):
+                return bool(EQUATION_CAPTION_PREFIX_RE.match(full_txt))
+            return bool(EQUATION_CAPTION_PREFIX_RE.match(full_txt))
+
+        all_paragraphs = list(body.findall(f"{w}p"))
+        for p in all_paragraphs:
+            p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+            if MARKER_PREFIX in p_text:
+                idx = p_text.find(MARKER_PREFIX)
+                json_str = (
+                    p_text[idx + len(MARKER_PREFIX) :]
+                    .strip()
+                    .replace("“", '"')
+                    .replace("”", '"')
+                )
+                try:
+                    params = json.loads(json_str)
+                    current_layout = SectionLayout.from_params(params, previous_layout=current_layout)
+                except Exception:
+                    pass
+                continue
+
+            omathpara = p.find(f"{m}oMathPara")
+            math_children: list[etree.Element] = []
+            if omathpara is not None:
+                math_children = list(omathpara.findall(f"{m}oMath"))
+            else:
+                omaths = p.findall(f"{m}oMath")
+                if omaths:
+                    non_math = "".join(t.text or "" for t in p.xpath(".//w:r/w:t", namespaces=NSMAP)).strip()
+                    has_fld = p.xpath(".//w:fldSimple[contains(@w:instr, 'Equation')]", namespaces=NSMAP)
+                    if not non_math and not has_fld:
+                        math_children = list(omaths)
+
+            if not math_children:
+                continue
+
+            page_w, _ = PAGE_SIZES_DXA.get(current_layout.page, {}).get(
+                current_layout.orientation, (11906, 16838)
+            )
+            if current_layout.custom_width_dxa:
+                page_w = current_layout.custom_width_dxa
+            avail_w = max(1000, page_w - current_layout.margin_left_dxa - current_layout.margin_right_dxa)
+            cols = max(1, current_layout.columns)
+            col_w = (avail_w - (cols - 1) * current_layout.column_space_dxa) // cols
+            center_pos = max(100, col_w // 2)
+            right_pos = max(200, col_w)
+
+            prev_p = p.getprevious()
+            next_p = p.getnext()
+
+            has_prev_caption = is_eq_caption(prev_p)
+            has_next_caption = not has_prev_caption and is_eq_caption(next_p)
+
+            equation_number += 1
+
+            if has_prev_caption and prev_p is not None:
+                formatted_captions.add(id(prev_p))
+                prev_pPr = prev_p.find(f"{w}pPr")
+                if prev_pPr is None:
+                    prev_pPr = etree.Element(f"{w}pPr")
+                    prev_p.insert(0, prev_pPr)
+                pStyle = prev_pPr.find(f"{w}pStyle")
+                if pStyle is None:
+                    pStyle = etree.SubElement(prev_pPr, f"{w}pStyle")
+                pStyle.set(f"{w}val", caption_style)
+                if prev_pPr.find(f"{w}keepNext") is None:
+                    etree.SubElement(prev_pPr, f"{w}keepNext")
+                cls._sort_pPr(prev_pPr)
+                cls._make_caption_runs(prev_p, equation_number, label="Equation", use_curr=False)
+
+            use_curr = has_prev_caption
+            pPr = p.find(f"{w}pPr")
+            if pPr is None:
+                pPr = etree.Element(f"{w}pPr")
+                p.insert(0, pPr)
+
+            jc = pPr.find(f"{w}jc")
+            if jc is None:
+                jc = etree.SubElement(pPr, f"{w}jc")
+            jc.set(f"{w}val", "left")
+
+            tabs = pPr.find(f"{w}tabs")
+            if tabs is not None:
+                pPr.remove(tabs)
+            tabs = etree.SubElement(pPr, f"{w}tabs")
+            t_center = etree.SubElement(tabs, f"{w}tab")
+            t_center.set(f"{w}val", "center")
+            t_center.set(f"{w}pos", str(center_pos))
+            t_right = etree.SubElement(tabs, f"{w}tab")
+            t_right.set(f"{w}val", "right")
+            t_right.set(f"{w}pos", str(right_pos))
+
+            if has_next_caption and pPr.find(f"{w}keepNext") is None:
+                etree.SubElement(pPr, f"{w}keepNext")
+
+            cls._sort_pPr(pPr)
+
+            for child in list(p):
+                if child != pPr:
+                    p.remove(child)
+
+            r_tab1 = etree.SubElement(p, f"{w}r")
+            etree.SubElement(r_tab1, f"{w}tab")
+
+            for m_elem in math_children:
+                p.append(m_elem)
+
+            r_tab2 = etree.SubElement(p, f"{w}r")
+            etree.SubElement(r_tab2, f"{w}tab")
+
+            r_lp = etree.SubElement(p, f"{w}r")
+            t_lp = etree.SubElement(r_lp, f"{w}t")
+            t_lp.set(f"{{{XML_NS}}}space", "preserve")
+            t_lp.text = "("
+
+            fld = etree.SubElement(p, f"{w}fldSimple")
+            instr = " SEQ Equation \\c \\* ARABIC " if use_curr else " SEQ Equation \\* ARABIC "
+            fld.set(f"{w}instr", instr)
+            r_num = etree.SubElement(fld, f"{w}r")
+            t_num = etree.SubElement(r_num, f"{w}t")
+            t_num.set(f"{{{XML_NS}}}space", "preserve")
+            t_num.text = str(equation_number)
+
+            r_rp = etree.SubElement(p, f"{w}r")
+            t_rp = etree.SubElement(r_rp, f"{w}t")
+            t_rp.set(f"{{{XML_NS}}}space", "preserve")
+            t_rp.text = ")"
+
+            if has_next_caption and next_p is not None:
+                formatted_captions.add(id(next_p))
+                next_pPr = next_p.find(f"{w}pPr")
+                if next_pPr is None:
+                    next_pPr = etree.Element(f"{w}pPr")
+                    next_p.insert(0, next_pPr)
+                pStyle = next_pPr.find(f"{w}pStyle")
+                if pStyle is None:
+                    pStyle = etree.SubElement(next_pPr, f"{w}pStyle")
+                pStyle.set(f"{w}val", caption_style)
+                cls._sort_pPr(next_pPr)
+                cls._make_caption_runs(next_p, equation_number, label="Equation", use_curr=True)
+
+    @classmethod
     def _find_caption_style(cls, styles_xml: bytes) -> str:
         """Returns the template's caption paragraph style id."""
         if styles_xml:
@@ -481,6 +669,7 @@ class DocxPostprocessor:
 
         cls._format_tables(body, has_table_grid)
         cls._format_table_captions(body, caption_style)
+        cls._format_equations(body, caption_style, initial_layout)
 
         # 2. Extract terminal sectPr to use as template for headers/footers
         terminal_sect_pr = body.find(f"{{{W_NS}}}sectPr")

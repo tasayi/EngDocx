@@ -175,8 +175,10 @@ class PublishingService:
             if p.style and p.style.name.startswith("Heading"):
                 stats["headings"] += 1
 
-            # Check for native Word OMML math elements (<m:oMath> or <m:oMathPara>)
-            math_elements = p._p.xpath(".//m:oMath | .//m:oMathPara")
-            stats["equations"] += len(math_elements)
+        # Check for native Word OMML math elements (<m:oMath> or <m:oMathPara>) across the document
+        math_elements = doc.element.xpath(
+            ".//m:oMathPara | .//m:oMath[not(ancestor::m:oMathPara)]"
+        )
+        stats["equations"] = len(math_elements)
 
         return stats
