@@ -188,7 +188,11 @@ async def get_figure_preview(session_id: str, figure_id: str) -> FileResponse:
     return FileResponse(
         source_path,
         media_type=media_type,
-        headers={"Cache-Control": "no-cache, must-revalidate"},
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 

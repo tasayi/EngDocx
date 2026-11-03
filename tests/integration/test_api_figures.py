@@ -338,4 +338,40 @@ async def test_figure_replace_api(async_client: AsyncClient, tmp_path: Path):
     assert missing_res.status_code == 404
     assert "not found" in missing_res.json()["detail"].lower()
 
+    # 7. Test Cache-Control headers on preview endpoint
+    fig1_prev = await async_client.get(f"/api/figures/{session_id}/FIG-001/preview")
+    assert fig1_prev.status_code == 200
+    assert "no-store" in fig1_prev.headers.get("cache-control", "")
+
+    # 8. Test HTML Preview contains cache-busting query parameter
+    from engdoc.compiler.html_preview import HTMLPreviewGenerator
+    session_obj = SessionManager.get_session(session_id)
+    html_preview = await HTMLPreviewGenerator.generate_preview(
+        emd_text="@figure FIG-001\n  caption: Test Fig\n@end",
+        workspace_dir=session_obj.workspace_dir,
+        session_id=session_id,
+    )
+    assert f"/api/figures/{session_id}/FIG-001/preview?v=" in html_preview.html
+
+    # 9. Test DOCX compilation with the replaced figure compiles cleanly without sizing overflow error
+    doc_with_fig = """# Replaced Figure Document
+
+@figure FIG-001
+  caption: Antenna Array Diagram
+  width: 14cm
+@end
+"""
+    await async_client.put(
+        f"/api/projects/{session_id}/file",
+        json={"path": "content/main.md", "content": doc_with_fig},
+    )
+    compile_res = await async_client.post(
+        "/api/compile/docx",
+        json={"session_id": session_id, "output_filename": "Replaced_Report.docx"},
+    )
+    assert compile_res.status_code == 200
+    comp_json = compile_res.json()
+    assert comp_json["success"] is True
+    assert comp_json["stats"]["drawings"] >= 1
+
 

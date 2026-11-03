@@ -86,7 +86,7 @@ export class FigureManagerUI {
             Height: ${fig.height || "auto"}<br>
             Alignment: ${fig.alignment || "center"}<br>
             <div style="margin-top: 8px; text-align: center; background: #fff; padding: 6px; border-radius: 4px;">
-              <img src="/api/figures/${sessionId}/${fig.id}/preview" style="max-width: 100%; max-height: 120px; object-fit: contain;">
+              <img src="/api/figures/${sessionId}/${fig.id}/preview?v=${encodeURIComponent(fig.source_hash || Date.now())}" style="max-width: 100%; max-height: 120px; object-fit: contain;">
             </div>
           `;
         }
@@ -123,7 +123,7 @@ export class FigureManagerUI {
       const previewBox = document.createElement("div");
       previewBox.className = "figure-card-preview";
       const img = document.createElement("img");
-      img.src = `/api/figures/${sessionId}/${fig.id}/preview`;
+      img.src = `/api/figures/${sessionId}/${fig.id}/preview?v=${encodeURIComponent(fig.source_hash || Date.now())}`;
       img.alt = fig.caption || fig.id;
       previewBox.appendChild(img);
 

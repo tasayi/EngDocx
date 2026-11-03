@@ -148,7 +148,14 @@ class FigureRegistryManager:
             except Exception:
                 pass
 
-        # Invalidate old compiled cache file
+        # Invalidate all compiled cache files matching this figure ID
+        cache_dir = workspace_dir / "assets" / "figures" / ".cache"
+        if cache_dir.is_dir():
+            for cached_file in cache_dir.glob(f"{figure_id}.*"):
+                try:
+                    cached_file.unlink()
+                except Exception:
+                    pass
         if old_compiled_path and old_compiled_path.is_file():
             try:
                 old_compiled_path.unlink()
@@ -156,7 +163,7 @@ class FigureRegistryManager:
                 pass
 
         fig.source = f"assets/figures/{safe_filename}".replace("\\", "/")
-        fig.source_hash = compute_sha256(dest_file)
+        fig.source_hash = None
         fig.compiled_asset = None  # Force re-compilation
 
         # Pre-compile the new asset and save registry

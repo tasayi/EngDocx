@@ -71,24 +71,47 @@ class DocxPostprocessor:
     @classmethod
     def _apply_size_hint(cls, p: etree.Element, title: str) -> None:
         """Forces drawing extents from 'width:'/'height:' hints in the docPr title."""
-        w_m = re.search(r"width:([\d.]+)\s*(cm|mm|in|pt|px)", title)
-        if not w_m:
-            return
-        h_m = re.search(r"height:([\d.]+)\s*(cm|mm|in|pt|px)", title)
-        emu = {"cm": 360000, "mm": 36000, "in": 914400, "pt": 12700, "px": 9525}
-        cx = int(float(w_m.group(1)) * emu[w_m.group(2)])
-        for extent in p.xpath(".//wp:extent", namespaces=NSMAP):
-            old_cx, old_cy = int(extent.get("cx", "0")), int(extent.get("cy", "0"))
-            if h_m:
-                cy = int(float(h_m.group(1)) * emu[h_m.group(2)])
-            else:
-                cy = int(cx * old_cy / old_cx) if old_cx else old_cy
-            extent.set("cx", str(cx))
-            extent.set("cy", str(cy))
-            inline = extent.getparent()
-            for a_ext in inline.xpath(".//a:xfrm/a:ext", namespaces=NSMAP):
-                a_ext.set("cx", str(cx))
-                a_ext.set("cy", str(cy))
+        try:
+            w_m = re.search(r"width:([\d.]+)\s*(cm|mm|in|pt|px)", title)
+            if not w_m:
+                return
+            h_m = re.search(r"height:([\d.]+)\s*(cm|mm|in|pt|px)", title)
+            emu = {"cm": 360000, "mm": 36000, "in": 914400, "pt": 12700, "px": 9525}
+            unit = w_m.group(2)
+            val = float(w_m.group(1))
+            cx = int(val * emu.get(unit, 360000))
+            cx = max(10000, min(cx, 36000000))
+
+            for extent in p.xpath(".//wp:extent", namespaces=NSMAP):
+                try:
+                    old_cx = int(extent.get("cx", "0"))
+                    old_cy = int(extent.get("cy", "0"))
+                except (ValueError, TypeError):
+                    old_cx, old_cy = 0, 0
+
+                if h_m:
+                    h_unit = h_m.group(2)
+                    h_val = float(h_m.group(1))
+                    cy = int(h_val * emu.get(h_unit, 360000))
+                elif old_cx > 0 and old_cy > 0 and old_cx < 100000000 and old_cy < 100000000:
+                    try:
+                        cy = (cx * old_cy) // old_cx
+                    except Exception:
+                        cy = (cx * 3) // 4
+                else:
+                    cy = (cx * 3) // 4
+
+                cy = max(10000, min(cy, 36000000))
+
+                extent.set("cx", str(cx))
+                extent.set("cy", str(cy))
+                inline = extent.getparent()
+                if inline is not None:
+                    for a_ext in inline.xpath(".//a:xfrm/a:ext", namespaces=NSMAP):
+                        a_ext.set("cx", str(cx))
+                        a_ext.set("cy", str(cy))
+        except Exception:
+            pass
 
     @classmethod
     def _sort_pPr(cls, pPr: etree.Element) -> None:

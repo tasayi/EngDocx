@@ -152,7 +152,9 @@ class HTMLPreviewGenerator:
             if workspace_dir and session_id:
                 reg = FigureRegistryManager.load_registry(workspace_dir)
                 if fig_id in reg.figures:
-                    img_src = f"/api/figures/{session_id}/{fig_id}/preview"
+                    fig_hash = reg.figures[fig_id].source_hash or ""
+                    v_param = f"?v={fig_hash}" if fig_hash else ""
+                    img_src = f"/api/figures/{session_id}/{fig_id}/preview{v_param}"
                 elif source_val:
                     img_src = f"/api/projects/{session_id}/assets/{source_val}"
                 else:

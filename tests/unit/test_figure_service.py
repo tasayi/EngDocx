@@ -158,7 +158,45 @@ async def test_html_preview_figure_caption_and_alignment():
     assert '<figure class="preview-figure align-center" id="fig-FIG-001"' in preview.html
     assert "<strong>Figure 1</strong>: Phased array antenna architecture" in preview.html
     assert "height: 8cm;" in preview.html
-
     # Figure 2: left aligned, sequential number 2
     assert '<figure class="preview-figure align-left" id="fig-FIG-002"' in preview.html
     assert "<strong>Figure 2</strong>: Detailed receiver schematic" in preview.html
+
+
+def test_apply_size_hint_overflow_and_safe_fallback():
+    # 1. Test extreme 64-bit integer values in extent (would previously cause OverflowError)
+    sample_xml = f"""<w:p xmlns:w="{W_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <w:r>
+        <w:drawing>
+          <wp:inline>
+            <wp:extent cx="18446744073709551615" cy="18446744073709551615"/>
+            <wp:docPr id="1" name="Pic" title="align:center;width:16cm"/>
+            <a:graphic>
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <a:xfrm>
+                  <a:ext cx="18446744073709551615" cy="18446744073709551615"/>
+                </a:xfrm>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>"""
+    p = etree.fromstring(sample_xml)
+    # Must not raise OverflowError: integer division result too large for a float
+    DocxPostprocessor._apply_size_hint(p, "align:center;width:16cm")
+    extent = p.find(".//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}extent")
+    assert extent is not None
+    cx = int(extent.get("cx"))
+    cy = int(extent.get("cy"))
+    assert cx == 16 * 360000
+    # cy falls back to standard 4:3 ratio: cx * 3 // 4
+    assert cy == (16 * 360000 * 3) // 4
+    assert 10000 <= cy <= 36000000
+
+    # 2. Test zero / negative old_cx and old_cy
+    p_zero = etree.fromstring(sample_xml.replace("18446744073709551615", "0"))
+    DocxPostprocessor._apply_size_hint(p_zero, "align:left;width:10cm")
+    ext_zero = p_zero.find(".//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}extent")
+    assert int(ext_zero.get("cx")) == 10 * 360000
+    assert int(ext_zero.get("cy")) == (10 * 360000 * 3) // 4
