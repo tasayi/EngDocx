@@ -131,12 +131,48 @@ Standard full-width single-column narrative.
 Wide schematic diagram or extensive tabular matrix in landscape orientation.
 ```
 
-### Native Word Equations (OMML)
-Equations written in LaTeX syntax are converted directly into Microsoft Word native OMML equations (`<m:oMath>`):
+### Native Word Equations (OMML) & IEEE Formatting
+Equations written in LaTeX syntax are converted directly into Microsoft Word native OMML equations (`<m:oMath>`) with IEEE-standard centered display math, flush-right `(1)` numbering, and adjacent caption synchronization:
 
 $$
-P_{\text{rad}} = \epsilon \sigma A \left( T_1^4 - T_2^4 \right)
-$$
+SNR = \frac{P_{\text{signal}}}{k_B \cdot T \cdot B \cdot F}
+$$ {#eq:snr}
+
+### Advanced Table Directives (`@table ... @end`)
+Configurable enterprise tables with physical row heights, themes, borders, row striping, and automatic numbering:
+
+```markdown
+@table
+  caption: Measured Link Budget Margin
+  alignment: center
+  min_row_height: 12mm
+  border: subtle
+  theme: light
+  row_banding: true
+| Parameter | Design Target | Measured | Margin |
+| :--- | :--- | :--- | :--- |
+| Frequency | 2.45 GHz | 2.452 GHz | Pass |
+| Noise Figure | 2.1 dB | 1.95 dB | +0.15 dB |
+@end {#tbl:link_budget}
+```
+
+### Bibliography & References (`@references ... @end`)
+IEEE-formatted hanging indent reference section with bracketed keys and native bookmarking:
+
+```markdown
+@references
+  ref1: C. E. Shannon, "A Mathematical Theory of Communication," BSTJ, 1948.
+  ref2: J. G. Proakis, Digital Communications, 5th ed. McGraw-Hill, 2008.
+@end
+```
+
+### Unified Cross-Referencing & Citations
+Dynamic in-text references compile to native Word OpenXML `w:fldSimple w:instr=" REF ... \h "` dynamic fields with hyperlinks:
+- **Figures**: `@fig:diag` $\rightarrow$ `Figure 1`, `Figure @fig:diag` $\rightarrow$ `Figure 1`, `[-@fig:diag]` $\rightarrow$ `1`
+- **Tables**: `@tbl:link_budget` $\rightarrow$ `Table 1`, `Table @tbl:link_budget` $\rightarrow$ `Table 1`, `[-@tbl:link_budget]` $\rightarrow$ `1`
+- **Equations**: `@eq:snr` $\rightarrow$ `(1)`, `Equation @eq:snr` $\rightarrow$ `Equation (1)`, `[-@eq:snr]` $\rightarrow$ `1`
+- **Sections**: `@sec:architecture` $\rightarrow$ `System Architecture`, `Section @sec:architecture` $\rightarrow$ `Section 2.1`
+- **Citations**: `[@ref1]` $\rightarrow$ `[1]`, `[@ref1, @ref2]` $\rightarrow$ `[1, 2]`, `@bib:ref1` $\rightarrow$ `[1]`
 
 ### Vector Figure Embedding & Management
 ```markdown

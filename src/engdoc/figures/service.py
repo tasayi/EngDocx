@@ -92,6 +92,10 @@ class FigureService:
         caption_raw = params.get("caption") or (fig.caption if fig else "") or ""
         seq_num = params.get("seq_number")
         full_caption, _, _ = format_figure_caption(fig_id, caption_raw, seq_number=seq_num)
+        alias = params.get("alias")
+        if alias and alias != fig_id:
+            full_caption += f" ENGDOC_FIG_ANCHOR:{alias}"
+        full_caption += f" ENGDOC_FIG_ANCHOR:{fig_id}"
 
         width = params.get("width") or (fig.width if fig else "") or "16cm"
         height = params.get("height") or (fig.height if fig else "") or ""

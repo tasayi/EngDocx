@@ -150,20 +150,20 @@ Batch deletes multiple figures from the registry and disk.
 ## 4. Compilation & Publishing
 
 ### `POST /api/compile/preview`
-Generates live in-browser HTML preview with MathJax math and visual section breaks.
+Generates live in-browser HTML preview with MathJax math, visual section breaks, IEEE equation numbers, styled `@table` containers, IEEE `@references` lists, and clickable cross-reference and citation hyperlinks (`<a class="preview-crossref">`, `<a class="preview-citation">`).
 - **Request Body**:
   ```json
   {
     "session_id": "...",
-    "content": "# Title\n\n$$E = mc^2$$"
+    "content": "# Title\n\nSee @fig:diagram and [@ref1].\n\n@figure FIG-001\n  caption: Architecture\n@end {#fig:diagram}\n\n@references\n  ref1: First Paper, 2024.\n@end"
   }
   ```
 - **Response `200 OK`**:
   ```json
   {
-    "html": "<h1>Title</h1>...",
+    "html": "<div class=\"preview-continuous-section columns-1\">...",
     "title": "Title",
-    "stats": { "headings": 1, "equations": 1 }
+    "stats": { "headings": 1, "equations": 0, "directives": 2, "tables": 0 }
   }
   ```
 

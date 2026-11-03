@@ -443,4 +443,181 @@
   display: none !important;
 }
 
+/* Cross References and Citations in Preview */
+.preview-crossref {
+  color: #0284c7;
+  text-decoration: none;
+  font-weight: 500;
+  border-bottom: 1px dotted rgba(2, 132, 199, 0.4);
+  transition: all 0.15s ease;
+}
+
+.preview-crossref:hover {
+  color: #0369a1;
+  border-bottom: 1px solid #0369a1;
+}
+
+.preview-citation {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 600;
+  padding: 0 1px;
+  transition: color 0.15s ease;
+}
+
+.preview-citation:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.preview-eq-anchor {
+  display: block;
+  position: relative;
+  top: -12px;
+  visibility: hidden;
+}
+
+/* Advanced Table Container in Preview */
+.preview-table-container {
+  margin: 16px 0;
+  width: 100%;
+}
+
+.preview-table-container.align-center {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.preview-table-container.align-left {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.preview-table-container.align-right {
+  margin-left: auto;
+  margin-right: 0;
+}
+
+.preview-table-container .table-caption {
+  font-size: 10pt;
+  color: #475569;
+  margin-bottom: 6px;
+  font-style: italic;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.preview-table-container table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5pt;
+  margin-bottom: 8px;
+}
+
+.preview-table-container th,
+.preview-table-container td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.preview-table-container.border-single table,
+.preview-table-container.border-single th,
+.preview-table-container.border-single td {
+  border: 1px solid #cbd5e1;
+}
+
+.preview-table-container.border-double table,
+.preview-table-container.border-double th,
+.preview-table-container.border-double td {
+  border: 3px double #94a3b8;
+}
+
+.preview-table-container.border-subtle table,
+.preview-table-container.border-subtle th,
+.preview-table-container.border-subtle td {
+  border: 1px solid #e2e8f0;
+}
+
+.preview-table-container.border-none table,
+.preview-table-container.border-none th,
+.preview-table-container.border-none td {
+  border: none;
+}
+
+/* Theme presets: Light & Dark */
+.preview-table-container.theme-light th {
+  background-color: #f1f5f9;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.preview-table-container.theme-light.row-banding tbody tr:nth-child(even) {
+  background-color: #f8fafc;
+}
+
+.preview-table-container.theme-dark table {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+.preview-table-container.theme-dark th {
+  background-color: #1e293b;
+  color: #f8fafc;
+  font-weight: 600;
+}
+
+.preview-table-container.theme-dark.border-single table,
+.preview-table-container.theme-dark.border-single th,
+.preview-table-container.theme-dark.border-single td {
+  border-color: #334155;
+}
+
+.preview-table-container.theme-dark.row-banding tbody tr:nth-child(even) {
+  background-color: #1e293b;
+}
+
+/* IEEE References Section in Preview */
+.preview-references {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.preview-references h3 {
+  font-size: 13pt;
+  font-weight: 700;
+  margin-bottom: 12px;
+  color: #0f172a;
+}
+
+.preview-references-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.preview-reference-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 9.5pt;
+  line-height: 1.5;
+  color: #334155;
+  margin-bottom: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.preview-reference-item:target {
+  background-color: #fef08a;
+}
+
+.preview-reference-item .ref-num {
+  font-weight: 600;
+  color: #1e293b;
+  min-width: 24px;
+}
+
 

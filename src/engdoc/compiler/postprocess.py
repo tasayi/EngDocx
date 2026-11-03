@@ -1,5 +1,7 @@
 """Word OpenXML DOM Postprocessor for Multi-Section Layouts and Figures."""
 
+import base64
+import copy
 import json
 import os
 import posixpath
@@ -7,10 +9,16 @@ import re
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from lxml import etree
 
-from engdoc.compiler.layout import PAGE_SIZES_DXA, W_NS, SectionLayout
+from engdoc.compiler.layout import (
+    PAGE_SIZES_DXA,
+    W_NS,
+    SectionLayout,
+    parse_dimension_to_dxa,
+)
 
 MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -27,13 +35,24 @@ CAPTION_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 TABLE_CAPTION_PREFIX_RE = re.compile(
-    r"^(Table\s+[A-Za-z0-9_\-\.]*\s*[:\.\-]\s*)(.*)$",
+    r"^(Table(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
 EQUATION_CAPTION_PREFIX_RE = re.compile(
     r"^(Equation(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE | re.DOTALL,
 )
+
+
+def decode_payload(payload_str: str) -> Any:
+    """Decodes a JSON or base64-encoded JSON payload."""
+    payload_str = payload_str.strip()
+    try:
+        return json.loads(base64.b64decode(payload_str.encode("ascii")).decode("utf-8"))
+    except Exception:
+        pass
+    clean_json = payload_str.replace("“", '"').replace("”", '"')
+    return json.loads(clean_json)
 
 # ECMA-376 strict sequence for w:pPr child elements
 PPR_ORDER = {
@@ -145,9 +164,14 @@ class DocxPostprocessor:
         number: int,
         label: str = "Figure",
         use_curr: bool = False,
+        bookmark_keys: list[str] | None = None,
+        next_bm_id_fn: Any = None,
     ) -> None:
         """Rewrites a caption as '<label> <SEQ field>: description' so numbering is automatic."""
         full_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+        full_text = re.sub(
+            r"ENGDOC_(?:FIG|TBL|EQ|SEC)_ANCHOR:[A-Za-z0-9_\-]+", "", full_text
+        ).strip()
         if label == "Table":
             m = TABLE_CAPTION_PREFIX_RE.match(full_text)
         elif label == "Equation":
@@ -160,17 +184,51 @@ class DocxPostprocessor:
             if child.tag != f"{{{W_NS}}}pPr":
                 p.remove(child)
 
-        def add_run(parent: etree.Element, text: str) -> None:
+        def add_run(parent: etree.Element, text: str) -> etree.Element:
             r = etree.SubElement(parent, f"{{{W_NS}}}r")
             t = etree.SubElement(r, f"{{{W_NS}}}t")
             t.set(f"{{{XML_NS}}}space", "preserve")
             t.text = text
+            return r
+
+        # Label prefix bookmark (e.g. "Figure")
+        label_prefix = "Fig" if label == "Figure" else ("Tbl" if label == "Table" else label)
+        bm_end_ids: list[int] = []
+        if bookmark_keys and next_bm_id_fn:
+            for k in bookmark_keys:
+                clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                bid = next_bm_id_fn()
+                bm_s = etree.SubElement(p, f"{{{W_NS}}}bookmarkStart")
+                bm_s.set(f"{{{W_NS}}}id", str(bid))
+                bm_s.set(f"{{{W_NS}}}name", f"_Ref_{label_prefix}_{clean_k}")
+                bm_end_ids.append(bid)
 
         add_run(p, f"{label} ")
         fld = etree.SubElement(p, f"{{{W_NS}}}fldSimple")
         instr = f" SEQ {label} \\c \\* ARABIC " if use_curr else f" SEQ {label} \\* ARABIC "
         fld.set(f"{{{W_NS}}}instr", instr)
+
+        # Number-only bookmarks inside fld
+        num_end_ids: list[int] = []
+        if bookmark_keys and next_bm_id_fn:
+            for k in bookmark_keys:
+                clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                bid_num = next_bm_id_fn()
+                bm_num_s = etree.SubElement(fld, f"{{{W_NS}}}bookmarkStart")
+                bm_num_s.set(f"{{{W_NS}}}id", str(bid_num))
+                bm_num_s.set(f"{{{W_NS}}}name", f"_Ref_{label_prefix}Num_{clean_k}")
+                num_end_ids.append(bid_num)
+
         add_run(fld, str(number))
+
+        for bid_num in num_end_ids:
+            bm_num_e = etree.SubElement(fld, f"{{{W_NS}}}bookmarkEnd")
+            bm_num_e.set(f"{{{W_NS}}}id", str(bid_num))
+
+        for bid in bm_end_ids:
+            bm_e = etree.SubElement(p, f"{{{W_NS}}}bookmarkEnd")
+            bm_e.set(f"{{{W_NS}}}id", str(bid))
+
         add_run(p, f": {desc}" if desc else "")
 
     @staticmethod
@@ -265,13 +323,26 @@ class DocxPostprocessor:
 
     @classmethod
     def _format_tables(cls, body: etree.Element, has_table_grid: bool) -> None:
-        """Applies grid borders, left/centre cell alignment, zero paragraph spacing and 0.3in min row height."""
+        """Applies grid borders, left/centre cell alignment, zero paragraph spacing and custom styling."""
         w = f"{{{W_NS}}}"
-        for tbl in body.iter(f"{w}tbl"):
+        for tbl in list(body.iter(f"{w}tbl")):
             tblPr = tbl.find(f"{w}tblPr")
             if tblPr is None:
                 tblPr = etree.Element(f"{w}tblPr")
                 tbl.insert(0, tblPr)
+
+            config: dict[str, Any] = {}
+            prev = tbl.getprevious()
+            if prev is not None and prev.tag == f"{w}p":
+                p_text = "".join(t.text or "" for t in prev.xpath(".//w:t", namespaces=NSMAP))
+                if "ENGDOC_TABLE_CONFIG:" in p_text:
+                    idx = p_text.find("ENGDOC_TABLE_CONFIG:")
+                    raw_payload = p_text[idx + len("ENGDOC_TABLE_CONFIG:") :]
+                    try:
+                        config = decode_payload(raw_payload)
+                    except Exception:
+                        config = {}
+                    body.remove(prev)
 
             if has_table_grid:
                 style = tblPr.find(f"{w}tblStyle")
@@ -279,16 +350,43 @@ class DocxPostprocessor:
                     style = etree.SubElement(tblPr, f"{w}tblStyle")
                 style.set(f"{w}val", "TableGrid")
 
+            # Table alignment
+            tbl_align = str(config.get("alignment", "center_left")).lower()
+            jc_tbl = tblPr.find(f"{w}jc")
+            if jc_tbl is None:
+                jc_tbl = etree.SubElement(tblPr, f"{w}jc")
+            if "left" in tbl_align and "center" not in tbl_align:
+                jc_tbl.set(f"{w}val", "left")
+            elif "right" in tbl_align:
+                jc_tbl.set(f"{w}val", "right")
+            else:
+                jc_tbl.set(f"{w}val", "center")
+
+            # Borders
+            border_style = str(config.get("border", "single")).lower()
             borders = tblPr.find(f"{w}tblBorders")
             if borders is not None:
                 tblPr.remove(borders)
             borders = etree.SubElement(tblPr, f"{w}tblBorders")
             for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
                 b = etree.SubElement(borders, f"{w}{side}")
-                b.set(f"{w}val", "single")
-                b.set(f"{w}sz", "4")
-                b.set(f"{w}space", "0")
-                b.set(f"{w}color", "auto")
+                if border_style == "none":
+                    b.set(f"{w}val", "none")
+                elif border_style == "double":
+                    b.set(f"{w}val", "double")
+                    b.set(f"{w}sz", "8")
+                    b.set(f"{w}space", "0")
+                    b.set(f"{w}color", "auto")
+                elif border_style == "subtle":
+                    b.set(f"{w}val", "single")
+                    b.set(f"{w}sz", "2")
+                    b.set(f"{w}space", "0")
+                    b.set(f"{w}color", "CBD5E1")
+                else:
+                    b.set(f"{w}val", "single")
+                    b.set(f"{w}sz", "4")
+                    b.set(f"{w}space", "0")
+                    b.set(f"{w}color", "auto")
 
             order = [
                 "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize",
@@ -306,7 +404,17 @@ class DocxPostprocessor:
             for k in kids:
                 tblPr.append(k)
 
-            for tr in tbl.findall(f"{w}tr"):
+            # Row height, shading, header highlighting
+            raw_h = config.get("min_row_height") or config.get("min_height")
+            row_h_dxa = parse_dimension_to_dxa(raw_h, default=432) if raw_h else 432
+            theme = str(config.get("theme", "light")).lower()
+            hdr_fill = "1E293B" if theme == "dark" else "F1F5F9"
+            band_fill = "0F172A" if theme == "dark" else "F8FAFC"
+            highlight_first = config.get("highlight_first_row", True)
+            row_banding = config.get("row_banding", False)
+
+            rows = tbl.findall(f"{w}tr")
+            for r_idx, tr in enumerate(rows):
                 trPr = tr.find(f"{w}trPr")
                 if trPr is None:
                     trPr = etree.Element(f"{w}trPr")
@@ -320,8 +428,14 @@ class DocxPostprocessor:
                         hdr.addprevious(height)
                     else:
                         trPr.append(height)
-                height.set(f"{w}val", "432")
+                height.set(f"{w}val", str(row_h_dxa))
                 height.set(f"{w}hRule", "atLeast")
+
+                is_header = r_idx == 0 and highlight_first
+                if is_header and trPr.find(f"{w}tblHeader") is None:
+                    trPr.append(etree.Element(f"{w}tblHeader"))
+
+                is_banded = r_idx > 0 and row_banding and (r_idx % 2 == 0)
 
                 for tc in tr.findall(f"{w}tc"):
                     tcPr = tc.find(f"{w}tcPr")
@@ -332,6 +446,23 @@ class DocxPostprocessor:
                     if v is None:
                         v = etree.SubElement(tcPr, f"{w}vAlign")
                     v.set(f"{w}val", "center")
+
+                    if is_header:
+                        shd = tcPr.find(f"{w}shd")
+                        if shd is not None:
+                            tcPr.remove(shd)
+                        shd = etree.SubElement(tcPr, f"{w}shd")
+                        shd.set(f"{w}val", "clear")
+                        shd.set(f"{w}color", "auto")
+                        shd.set(f"{w}fill", hdr_fill)
+                    elif is_banded:
+                        shd = tcPr.find(f"{w}shd")
+                        if shd is not None:
+                            tcPr.remove(shd)
+                        shd = etree.SubElement(tcPr, f"{w}shd")
+                        shd.set(f"{w}val", "clear")
+                        shd.set(f"{w}color", "auto")
+                        shd.set(f"{w}fill", band_fill)
 
                     for p in tc.iter(f"{w}p"):
                         pPr = p.find(f"{w}pPr")
@@ -345,11 +476,31 @@ class DocxPostprocessor:
                         jc = pPr.find(f"{w}jc")
                         if jc is None:
                             jc = etree.SubElement(pPr, f"{w}jc")
-                        jc.set(f"{w}val", "left")
+                        if tbl_align == "center":
+                            jc.set(f"{w}val", "center")
+                        elif tbl_align == "right":
+                            jc.set(f"{w}val", "right")
+                        else:
+                            jc.set(f"{w}val", "left")
+
+                        if is_header:
+                            for r in p.iter(f"{w}r"):
+                                rPr = r.find(f"{w}rPr")
+                                if rPr is None:
+                                    rPr = etree.Element(f"{w}rPr")
+                                    r.insert(0, rPr)
+                                if rPr.find(f"{w}b") is None:
+                                    etree.SubElement(rPr, f"{w}b")
                         cls._sort_pPr(pPr)
 
     @classmethod
-    def _format_table_captions(cls, body: etree.Element, caption_style: str) -> None:
+    def _format_table_captions(
+        cls,
+        body: etree.Element,
+        caption_style: str,
+        target_map: dict[tuple[str, str], tuple[str, str, str]] | None = None,
+        next_bm_id_fn: Any = None,
+    ) -> None:
         """Turns the paragraph above a table ('Table: ...' or 'Table N: ...') into a numbered caption."""
         w = f"{{{W_NS}}}"
         number = 0
@@ -360,7 +511,9 @@ class DocxPostprocessor:
             pStyle = prev.find(f"{w}pPr/{w}pStyle")
             style_val = pStyle.get(f"{w}val") if pStyle is not None else ""
             text = "".join(t.text or "" for t in prev.xpath(".//w:t", namespaces=NSMAP))
-            if style_val != "TableCaption" and not TABLE_CAPTION_PREFIX_RE.match(text.strip()):
+            tbl_anchors = re.findall(r"ENGDOC_TBL_ANCHOR:([A-Za-z0-9_\-]+)", text)
+            clean_text = re.sub(r"ENGDOC_TBL_ANCHOR:[A-Za-z0-9_\-]+", "", text).strip()
+            if style_val != "TableCaption" and not TABLE_CAPTION_PREFIX_RE.match(clean_text):
                 continue
 
             pPr = prev.find(f"{w}pPr")
@@ -374,7 +527,18 @@ class DocxPostprocessor:
                 etree.SubElement(pPr, f"{w}keepNext")
             cls._sort_pPr(pPr)
             number += 1
-            cls._make_caption_runs(prev, number, label="Table")
+            cls._make_caption_runs(
+                prev,
+                number,
+                label="Table",
+                bookmark_keys=tbl_anchors,
+                next_bm_id_fn=next_bm_id_fn,
+            )
+            if target_map is not None:
+                for k in tbl_anchors:
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    target_map[("TBL", k)] = (f"_Ref_Tbl_{clean_k}", f"Table {number}", str(number))
+                    target_map[("TBL_NUM", k)] = (f"_Ref_TblNum_{clean_k}", str(number), str(number))
 
     @classmethod
     def _format_equations(
@@ -382,9 +546,11 @@ class DocxPostprocessor:
         body: etree.Element,
         caption_style: str,
         initial_layout: SectionLayout,
+        target_map: dict[tuple[str, str], tuple[str, str, str]] | None = None,
+        next_bm_id_fn: Any = None,
     ) -> None:
         """Formats display math paragraphs with center/right tabs and right-aligned IEEE (N) numbers,
-        and synchronizes with adjacent equation captions.
+        and synchronizes with adjacent equation captions and bookmarks.
         """
         w = f"{{{W_NS}}}"
         m = f"{{{M_NS}}}"
@@ -400,9 +566,10 @@ class DocxPostprocessor:
             pStyle = elem.find(f"{w}pPr/{w}pStyle")
             style_val = pStyle.get(f"{w}val") if pStyle is not None else ""
             full_txt = "".join(t.text or "" for t in elem.xpath(".//w:t", namespaces=NSMAP)).strip()
+            clean_txt = re.sub(r"ENGDOC_EQ_ANCHOR:[A-Za-z0-9_\-]+", "", full_txt).strip()
             if style_val in ("EquationCaption", "Caption"):
-                return bool(EQUATION_CAPTION_PREFIX_RE.match(full_txt))
-            return bool(EQUATION_CAPTION_PREFIX_RE.match(full_txt))
+                return bool(EQUATION_CAPTION_PREFIX_RE.match(clean_txt))
+            return bool(EQUATION_CAPTION_PREFIX_RE.match(clean_txt))
 
         all_paragraphs = list(body.findall(f"{w}p"))
         for p in all_paragraphs:
@@ -430,8 +597,9 @@ class DocxPostprocessor:
                 omaths = p.findall(f"{m}oMath")
                 if omaths:
                     non_math = "".join(t.text or "" for t in p.xpath(".//w:r/w:t", namespaces=NSMAP)).strip()
+                    clean_non_math = re.sub(r"ENGDOC_EQ_ANCHOR:[A-Za-z0-9_\-]+", "", non_math).strip()
                     has_fld = p.xpath(".//w:fldSimple[contains(@w:instr, 'Equation')]", namespaces=NSMAP)
-                    if not non_math and not has_fld:
+                    if not clean_non_math and not has_fld:
                         math_children = list(omaths)
 
             if not math_children:
@@ -450,6 +618,18 @@ class DocxPostprocessor:
 
             prev_p = p.getprevious()
             next_p = p.getnext()
+
+            # Extract any equation anchor tags
+            eq_anchors: list[str] = []
+            for check_elem in (prev_p, p, next_p):
+                if check_elem is not None:
+                    txt = "".join(t.text or "" for t in check_elem.xpath(".//w:t", namespaces=NSMAP))
+                    found = re.findall(r"ENGDOC_EQ_ANCHOR:([A-Za-z0-9_\-]+)", txt)
+                    if found:
+                        eq_anchors.extend(found)
+                        for t_node in check_elem.xpath(".//w:t", namespaces=NSMAP):
+                            if t_node.text and "ENGDOC_EQ_ANCHOR:" in t_node.text:
+                                t_node.text = re.sub(r"ENGDOC_EQ_ANCHOR:[A-Za-z0-9_\-]+", "", t_node.text).strip()
 
             has_prev_caption = is_eq_caption(prev_p)
             has_next_caption = not has_prev_caption and is_eq_caption(next_p)
@@ -511,6 +691,20 @@ class DocxPostprocessor:
             r_tab2 = etree.SubElement(p, f"{w}r")
             etree.SubElement(r_tab2, f"{w}tab")
 
+            # Bookmarks on equation line
+            bm_eq_end_ids: list[int] = []
+            if eq_anchors and next_bm_id_fn:
+                for k in eq_anchors:
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    bid = next_bm_id_fn()
+                    bm_s = etree.SubElement(p, f"{w}bookmarkStart")
+                    bm_s.set(f"{w}id", str(bid))
+                    bm_s.set(f"{w}name", f"_Ref_Eq_{clean_k}")
+                    bm_eq_end_ids.append(bid)
+                    if target_map is not None:
+                        target_map[("EQ", k)] = (f"_Ref_Eq_{clean_k}", f"({equation_number})", str(equation_number))
+                        target_map[("EQ_NUM", k)] = (f"_Ref_EqNum_{clean_k}", str(equation_number), str(equation_number))
+
             r_lp = etree.SubElement(p, f"{w}r")
             t_lp = etree.SubElement(r_lp, f"{w}t")
             t_lp.set(f"{{{XML_NS}}}space", "preserve")
@@ -519,15 +713,34 @@ class DocxPostprocessor:
             fld = etree.SubElement(p, f"{w}fldSimple")
             instr = " SEQ Equation \\c \\* ARABIC " if use_curr else " SEQ Equation \\* ARABIC "
             fld.set(f"{w}instr", instr)
+
+            bm_num_end_ids: list[int] = []
+            if eq_anchors and next_bm_id_fn:
+                for k in eq_anchors:
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    bid_num = next_bm_id_fn()
+                    bm_num_s = etree.SubElement(fld, f"{w}bookmarkStart")
+                    bm_num_s.set(f"{w}id", str(bid_num))
+                    bm_num_s.set(f"{w}name", f"_Ref_EqNum_{clean_k}")
+                    bm_num_end_ids.append(bid_num)
+
             r_num = etree.SubElement(fld, f"{w}r")
             t_num = etree.SubElement(r_num, f"{w}t")
             t_num.set(f"{{{XML_NS}}}space", "preserve")
             t_num.text = str(equation_number)
 
+            for bid_num in bm_num_end_ids:
+                bm_num_e = etree.SubElement(fld, f"{w}bookmarkEnd")
+                bm_num_e.set(f"{w}id", str(bid_num))
+
             r_rp = etree.SubElement(p, f"{w}r")
             t_rp = etree.SubElement(r_rp, f"{w}t")
             t_rp.set(f"{{{XML_NS}}}space", "preserve")
             t_rp.text = ")"
+
+            for bid in bm_eq_end_ids:
+                bm_e = etree.SubElement(p, f"{w}bookmarkEnd")
+                bm_e.set(f"{w}id", str(bid))
 
             if has_next_caption and next_p is not None:
                 formatted_captions.add(id(next_p))
@@ -541,6 +754,107 @@ class DocxPostprocessor:
                 pStyle.set(f"{w}val", caption_style)
                 cls._sort_pPr(next_pPr)
                 cls._make_caption_runs(next_p, equation_number, label="Equation", use_curr=True)
+
+    @classmethod
+    def _resolve_cross_references(
+        cls,
+        body: etree.Element,
+        target_map: dict[tuple[str, str], tuple[str, str, str]],
+    ) -> None:
+        """Resolves ENGDOC_XREF tokens into Word OpenXML dynamic REF fields with fallback."""
+        w = f"{{{W_NS}}}"
+        token_re = re.compile(
+            r"ENGDOC_XREF:(FIG|FIG_NUM|TBL|TBL_NUM|EQ|EQ_NUM|SEC|SEC_NUM|BIB):([A-Za-z0-9_\-]+)|ENGDOC_XREF:(BIB_MULTI):([A-Za-z0-9_\-,]+)"
+        )
+
+        for p in list(body.iter(f"{w}p")):
+            full_p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+            if "ENGDOC_XREF:" not in full_p_text:
+                continue
+
+            runs = list(p.findall(f"{w}r"))
+            has_token_in_run = any("ENGDOC_XREF:" in (t.text or "") for r in runs for t in r.findall(f"{w}t"))
+            if not has_token_in_run and len(runs) > 1:
+                first_t = runs[0].find(f"{w}t")
+                if first_t is not None:
+                    first_t.text = full_p_text
+                    for other_r in runs[1:]:
+                        p.remove(other_r)
+                    runs = [runs[0]]
+
+            for r in runs:
+                t_node = r.find(f"{w}t")
+                if t_node is None or not t_node.text or "ENGDOC_XREF:" not in t_node.text:
+                    continue
+
+                text = t_node.text
+                orig_rPr = r.find(f"{w}rPr")
+
+                def make_r(content: str, r_pr: etree.Element | None = orig_rPr) -> etree.Element:
+                    new_r = etree.Element(f"{w}r")
+                    if r_pr is not None:
+                        new_r.append(copy.deepcopy(r_pr))
+                    new_t = etree.SubElement(new_r, f"{w}t")
+                    new_t.set(f"{{{XML_NS}}}space", "preserve")
+                    new_t.text = content
+                    return new_r
+
+                def make_fld(
+                    instr: str, display: str, r_pr: etree.Element | None = orig_rPr
+                ) -> etree.Element:
+                    fld = etree.Element(f"{w}fldSimple")
+                    fld.set(f"{w}instr", instr)
+                    inner_r = etree.SubElement(fld, f"{w}r")
+                    if r_pr is not None:
+                        inner_r.append(copy.deepcopy(r_pr))
+                    inner_t = etree.SubElement(inner_r, f"{w}t")
+                    inner_t.set(f"{{{XML_NS}}}space", "preserve")
+                    inner_t.text = display
+                    return fld
+
+                new_elements: list[etree.Element] = []
+                last_idx = 0
+                for m in token_re.finditer(text):
+                    if m.start() > last_idx:
+                        new_elements.append(make_r(text[last_idx : m.start()]))
+
+                    if m.group(1):
+                        kind = m.group(1)
+                        k = m.group(2)
+                        target = target_map.get((kind, k))
+                        if not target and (kind.endswith("_NUM") or "_" in kind):
+                            base_kind = kind.replace("_NUM", "")
+                            target = target_map.get((base_kind, k))
+                        if target:
+                            bm_name, display_text, num = target
+                            use_text = num if kind.endswith("_NUM") else display_text
+                            new_elements.append(make_fld(f" REF {bm_name} \\h ", use_text))
+                        else:
+                            fallback = f"[{k}]" if "BIB" in kind else ("?" if "NUM" in kind else f"{kind} ?")
+                            new_elements.append(make_r(fallback))
+                    elif m.group(3):
+                        # BIB_MULTI
+                        keys = [k.strip() for k in m.group(4).split(",") if k.strip()]
+                        new_elements.append(make_r("["))
+                        for j, k in enumerate(keys):
+                            if j > 0:
+                                new_elements.append(make_r(", "))
+                            target = target_map.get(("BIB_NUM", k)) or target_map.get(("BIB", k))
+                            if target:
+                                bm_name, _, num = target
+                                new_elements.append(make_fld(f" REF {bm_name} \\h ", num))
+                            else:
+                                new_elements.append(make_r(k))
+                        new_elements.append(make_r("]"))
+
+                    last_idx = m.end()
+
+                if last_idx < len(text):
+                    new_elements.append(make_r(text[last_idx:]))
+
+                for elem in new_elements:
+                    r.addprevious(elem)
+                p.remove(r)
 
     @classmethod
     def _find_caption_style(cls, styles_xml: bytes) -> str:
@@ -589,6 +903,20 @@ class DocxPostprocessor:
         body = root.find(f"{{{W_NS}}}body")
         if body is None:
             return xml_bytes
+
+        target_map: dict[tuple[str, str], tuple[str, str, str]] = {}
+        existing_ids = [
+            int(x)
+            for x in root.xpath("//w:bookmarkStart/@w:id", namespaces=NSMAP)
+            if str(x).isdigit()
+        ]
+        bm_counter = max(existing_ids, default=0) + 1
+
+        def get_next_bm_id() -> int:
+            nonlocal bm_counter
+            bid = bm_counter
+            bm_counter += 1
+            return bid
 
         # 1. Process figure drawings and captions for centering and bold labels
         all_paragraphs = list(body.findall(f"{{{W_NS}}}p"))
@@ -644,6 +972,39 @@ class DocxPostprocessor:
                     next_text_nodes = next_p.xpath(".//w:t", namespaces=NSMAP)
                     next_text = "".join(t.text or "" for t in next_text_nodes).strip()
 
+                    fig_anchors: list[str] = re.findall(
+                        r"ENGDOC_FIG_ANCHOR:([A-Za-z0-9_\-]+)", next_text
+                    )
+                    p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+                    fig_anchors.extend(
+                        re.findall(r"ENGDOC_FIG_ANCHOR:([A-Za-z0-9_\-]+)", p_text)
+                    )
+                    if i + 2 < len(all_paragraphs):
+                        after_text = "".join(
+                            t.text or ""
+                            for t in all_paragraphs[i + 2].xpath(".//w:t", namespaces=NSMAP)
+                        )
+                        found_after = re.findall(
+                            r"ENGDOC_FIG_ANCHOR:([A-Za-z0-9_\-]+)", after_text
+                        )
+                        if found_after:
+                            fig_anchors.extend(found_after)
+                            if (
+                                re.sub(
+                                    r"ENGDOC_FIG_ANCHOR:[A-Za-z0-9_\-]+", "", after_text
+                                ).strip()
+                                == ""
+                            ):
+                                body.remove(all_paragraphs[i + 2])
+
+                    for t_elem in p.xpath(".//w:t", namespaces=NSMAP):
+                        if t_elem.text and "ENGDOC_FIG_ANCHOR:" in t_elem.text:
+                            t_elem.text = re.sub(
+                                r"ENGDOC_FIG_ANCHOR:[A-Za-z0-9_\-]+", "", t_elem.text
+                            ).strip()
+
+                    unique_fig_anchors = list(dict.fromkeys(fig_anchors))
+
                     is_caption = (
                         p_style_val in ("ImageCaption", "Caption")
                         or next_text.lower().startswith("figure")
@@ -665,11 +1026,181 @@ class DocxPostprocessor:
 
                         cls._sort_pPr(next_pPr)
                         figure_number += 1
-                        cls._make_caption_runs(next_p, figure_number)
+                        cls._make_caption_runs(
+                            next_p,
+                            figure_number,
+                            label="Figure",
+                            bookmark_keys=unique_fig_anchors,
+                            next_bm_id_fn=get_next_bm_id,
+                        )
+                        for k in unique_fig_anchors:
+                            clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                            target_map[("FIG", k)] = (
+                                f"_Ref_Fig_{clean_k}",
+                                f"Figure {figure_number}",
+                                str(figure_number),
+                            )
+                            target_map[("FIG_NUM", k)] = (
+                                f"_Ref_FigNum_{clean_k}",
+                                str(figure_number),
+                                str(figure_number),
+                            )
+
+        # Check any remaining unformatted figure captions that contain ENGDOC_FIG_ANCHOR
+        for p in list(body.findall(f"{{{W_NS}}}p")):
+            p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+            if "ENGDOC_FIG_ANCHOR:" in p_text:
+                fig_anchors = re.findall(r"ENGDOC_FIG_ANCHOR:([A-Za-z0-9_\-]+)", p_text)
+                unique_fig_anchors = list(dict.fromkeys(fig_anchors))
+                for t_elem in p.xpath(".//w:t", namespaces=NSMAP):
+                    if t_elem.text and "ENGDOC_FIG_ANCHOR:" in t_elem.text:
+                        t_elem.text = re.sub(
+                            r"ENGDOC_FIG_ANCHOR:[A-Za-z0-9_\-]+", "", t_elem.text
+                        ).strip()
+
+                figure_number += 1
+                cls._make_caption_runs(
+                    p,
+                    figure_number,
+                    label="Figure",
+                    bookmark_keys=unique_fig_anchors,
+                    next_bm_id_fn=get_next_bm_id,
+                )
+                for k in unique_fig_anchors:
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    target_map[("FIG", k)] = (
+                        f"_Ref_Fig_{clean_k}",
+                        f"Figure {figure_number}",
+                        str(figure_number),
+                    )
+                    target_map[("FIG_NUM", k)] = (
+                        f"_Ref_FigNum_{clean_k}",
+                        str(figure_number),
+                        str(figure_number),
+                    )
 
         cls._format_tables(body, has_table_grid)
-        cls._format_table_captions(body, caption_style)
-        cls._format_equations(body, caption_style, initial_layout)
+        cls._format_table_captions(body, caption_style, target_map, get_next_bm_id)
+        cls._format_equations(body, caption_style, initial_layout, target_map, get_next_bm_id)
+
+        # 2. Section headings bookmarks
+        for p in body.findall(f"{{{W_NS}}}p"):
+            p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+            if "ENGDOC_SEC_ANCHOR:" in p_text:
+                sec_anchors = re.findall(r"ENGDOC_SEC_ANCHOR:([A-Za-z0-9_\-]+)", p_text)
+                for t_elem in p.xpath(".//w:t", namespaces=NSMAP):
+                    if t_elem.text and "ENGDOC_SEC_ANCHOR:" in t_elem.text:
+                        t_elem.text = re.sub(r"ENGDOC_SEC_ANCHOR:[A-Za-z0-9_\-]+", "", t_elem.text).strip()
+                clean_heading = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP)).strip()
+                num_match = re.match(r"^([0-9IVXLCDM]+(?:\.[0-9]+)*)\s+", clean_heading)
+                sec_num = num_match.group(1) if num_match else clean_heading
+                for k in sec_anchors:
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    bm_s_id = get_next_bm_id()
+                    bm_s = etree.Element(f"{{{W_NS}}}bookmarkStart")
+                    bm_s.set(f"{{{W_NS}}}id", str(bm_s_id))
+                    bm_s.set(f"{{{W_NS}}}name", f"_Ref_Sec_{clean_k}")
+                    p.insert(0, bm_s)
+
+                    bm_e = etree.SubElement(p, f"{{{W_NS}}}bookmarkEnd")
+                    bm_e.set(f"{{{W_NS}}}id", str(bm_s_id))
+
+                    target_map[("SEC", k)] = (f"_Ref_Sec_{clean_k}", clean_heading, sec_num)
+                    target_map[("SEC_NUM", k)] = (f"_Ref_SecNum_{clean_k}", sec_num, sec_num)
+
+        # 3. Bibliography expansion
+        for p in list(body.findall(f"{{{W_NS}}}p")):
+            p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+            if "ENGDOC_BIBLIOGRAPHY:" in p_text:
+                idx = p_text.find("ENGDOC_BIBLIOGRAPHY:")
+                raw_payload = p_text[idx + len("ENGDOC_BIBLIOGRAPHY:") :]
+                try:
+                    raw_bib = decode_payload(raw_payload)
+                except Exception:
+                    raw_bib = []
+
+                entries: list[tuple[str, str]] = []
+                if isinstance(raw_bib, list):
+                    for item in raw_bib:
+                        if isinstance(item, dict):
+                            k = item.get("key") or item.get("id") or ""
+                            t = item.get("text") or item.get("title") or ""
+                            if k:
+                                entries.append((k, t))
+                elif isinstance(raw_bib, dict):
+                    for k, v in raw_bib.items():
+                        entries.append((k, str(v)))
+
+                ref_paragraphs: list[etree.Element] = []
+                for b_idx, (k, ref_text) in enumerate(entries, start=1):
+                    ref_p = etree.Element(f"{{{W_NS}}}p")
+                    ref_pPr = etree.SubElement(ref_p, f"{{{W_NS}}}pPr")
+                    pStyle = etree.SubElement(ref_pPr, f"{{{W_NS}}}pStyle")
+                    pStyle.set(f"{{{W_NS}}}val", "Bibliography")
+                    ind = etree.SubElement(ref_pPr, f"{{{W_NS}}}ind")
+                    ind.set(f"{{{W_NS}}}left", "432")
+                    ind.set(f"{{{W_NS}}}hanging", "432")
+                    spacing = etree.SubElement(ref_pPr, f"{{{W_NS}}}spacing")
+                    spacing.set(f"{{{W_NS}}}after", "120")
+                    spacing.set(f"{{{W_NS}}}line", "240")
+                    spacing.set(f"{{{W_NS}}}lineRule", "auto")
+                    tabs = etree.SubElement(ref_pPr, f"{{{W_NS}}}tabs")
+                    t_tab = etree.SubElement(tabs, f"{{{W_NS}}}tab")
+                    t_tab.set(f"{{{W_NS}}}val", "left")
+                    t_tab.set(f"{{{W_NS}}}pos", "432")
+                    cls._sort_pPr(ref_pPr)
+
+                    clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
+                    bm_bib_id = get_next_bm_id()
+                    bm_num_id = get_next_bm_id()
+
+                    bm_bib_s = etree.SubElement(ref_p, f"{{{W_NS}}}bookmarkStart")
+                    bm_bib_s.set(f"{{{W_NS}}}id", str(bm_bib_id))
+                    bm_bib_s.set(f"{{{W_NS}}}name", f"_Ref_Bib_{clean_k}")
+
+                    r_lb = etree.SubElement(ref_p, f"{{{W_NS}}}r")
+                    t_lb = etree.SubElement(r_lb, f"{{{W_NS}}}t")
+                    t_lb.set(f"{{{XML_NS}}}space", "preserve")
+                    t_lb.text = "["
+
+                    bm_num_s = etree.SubElement(ref_p, f"{{{W_NS}}}bookmarkStart")
+                    bm_num_s.set(f"{{{W_NS}}}id", str(bm_num_id))
+                    bm_num_s.set(f"{{{W_NS}}}name", f"_Ref_BibNum_{clean_k}")
+
+                    r_num = etree.SubElement(ref_p, f"{{{W_NS}}}r")
+                    t_num = etree.SubElement(r_num, f"{{{W_NS}}}t")
+                    t_num.set(f"{{{XML_NS}}}space", "preserve")
+                    t_num.text = str(b_idx)
+
+                    bm_num_e = etree.SubElement(ref_p, f"{{{W_NS}}}bookmarkEnd")
+                    bm_num_e.set(f"{{{W_NS}}}id", str(bm_num_id))
+
+                    r_rb = etree.SubElement(ref_p, f"{{{W_NS}}}r")
+                    t_rb = etree.SubElement(r_rb, f"{{{W_NS}}}t")
+                    t_rb.set(f"{{{XML_NS}}}space", "preserve")
+                    t_rb.text = "]"
+
+                    bm_bib_e = etree.SubElement(ref_p, f"{{{W_NS}}}bookmarkEnd")
+                    bm_bib_e.set(f"{{{W_NS}}}id", str(bm_bib_id))
+
+                    r_tab = etree.SubElement(ref_p, f"{{{W_NS}}}r")
+                    etree.SubElement(r_tab, f"{{{W_NS}}}tab")
+
+                    r_txt = etree.SubElement(ref_p, f"{{{W_NS}}}r")
+                    t_txt = etree.SubElement(r_txt, f"{{{W_NS}}}t")
+                    t_txt.set(f"{{{XML_NS}}}space", "preserve")
+                    t_txt.text = ref_text
+
+                    target_map[("BIB", k)] = (f"_Ref_Bib_{clean_k}", f"[{b_idx}]", str(b_idx))
+                    target_map[("BIB_NUM", k)] = (f"_Ref_BibNum_{clean_k}", str(b_idx), str(b_idx))
+                    ref_paragraphs.append(ref_p)
+
+                for ref_elem in ref_paragraphs:
+                    p.addprevious(ref_elem)
+                body.remove(p)
+
+        # 4. Resolve cross-references
+        cls._resolve_cross_references(body, target_map)
 
         # 2. Extract terminal sectPr to use as template for headers/footers
         terminal_sect_pr = body.find(f"{{{W_NS}}}sectPr")

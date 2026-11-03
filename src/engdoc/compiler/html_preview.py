@@ -10,7 +10,13 @@ from typing import Any
 from engdoc.compiler.runner import PandocRunner
 from engdoc.figures.registry import FigureRegistryManager
 from engdoc.figures.service import format_figure_caption
-from engdoc.markup.parser import EMDParser, convert_tsv_tables, parse_section_params
+from engdoc.markup.parser import (
+    EMDParser,
+    convert_tsv_tables,
+    parse_reference_entries,
+    parse_section_params,
+    parse_table_params,
+)
 
 
 @dataclass
@@ -115,13 +121,84 @@ class HTMLPreviewGenerator:
         # Wrap in initial section container
         content = f'<div class="preview-continuous-section columns-1">\n{content}\n</div>'
 
-        # 3. Resolve figures for preview
+        # ID mapping dictionaries for preview cross-referencing
+        fig_id_map: dict[str, int] = {}
+        tbl_id_map: dict[str, int] = {}
+        eq_id_map: dict[str, int] = {}
+        sec_id_map: dict[str, str] = {}
+        bib_id_map: dict[str, int] = {}
+
+        # 3a. Resolve @table blocks for preview
+        tbl_counter = 0
+
+        def table_preview_repl(m: re.Match) -> str:
+            nonlocal tbl_counter
+            tbl_counter += 1
+            h = m.group("header")
+            b = m.group("body")
+            tr = m.group("trailer")
+            tbl_id, params, tbl_md = parse_table_params(h, b, tr)
+            tbl_id = tbl_id or f"tbl-{tbl_counter:03d}"
+            tbl_id_map[tbl_id] = tbl_counter
+
+            caption = params.get("caption", "")
+            alignment = params.get("alignment", "center")
+            theme = params.get("theme", "light")
+            border = params.get("border", "single")
+            row_banding = params.get("row_banding", False)
+            highlight_first = params.get("highlight_first_row", True)
+
+            cap_html = (
+                f'<div class="preview-caption table-caption"><strong>Table {tbl_counter}</strong>'
+                f'{": " + caption if caption else ""}</div>'
+                if caption
+                else ""
+            )
+            classes = [
+                "preview-table-container",
+                f"align-{alignment}",
+                f"theme-{theme}",
+                f"border-{border}",
+            ]
+            if row_banding:
+                classes.append("row-banding")
+            if highlight_first:
+                classes.append("highlight-first")
+
+            converted_tbl = convert_tsv_tables(tbl_md) if "\t" in tbl_md else tbl_md
+            return (
+                f'\n<div class="{" ".join(classes)}" id="tbl-{tbl_id}">\n'
+                f'{cap_html}\n\n'
+                f'{converted_tbl}\n\n'
+                f'</div>\n'
+            )
+
+        content = re.sub(
+            r"^@table(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+            table_preview_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+
+        # 3b. Resolve figures for preview
         fig_counter = 0
 
         def figure_preview_repl(m: re.Match) -> str:
             nonlocal fig_counter
             fig_counter += 1
             fig_id = m.group("id") or f"FIG-{fig_counter:03d}"
+            trailer = m.group("trailer")
+            alias = ""
+            if trailer:
+                m_alias = re.search(r"\{#(?:fig:)?([A-Za-z0-9_\-]+)\}", trailer)
+                if m_alias:
+                    alias = m_alias.group(1)
+
+            fig_id_map[fig_id] = fig_counter
+            if alias:
+                fig_id_map[alias] = fig_counter
+            anchor_id = alias or fig_id
+
             body_text = m.group("body")
             caption_raw = ""
             width = "80%"
@@ -186,22 +263,35 @@ class HTMLPreviewGenerator:
                 caption_html = f"<figcaption><strong>{label}</strong></figcaption>"
 
             return (
-                f'\n<figure class="preview-figure align-{alignment}" id="fig-{fig_id}" style="text-align: {alignment};">'
+                f'\n<figure class="preview-figure align-{alignment}" id="fig-{anchor_id}" style="text-align: {alignment};">'
                 f"{img_tag}"
                 f"{caption_html}"
                 f"</figure>\n"
             )
 
         content = re.sub(
-            r"^@figure(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            r"^@figure(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
             figure_preview_repl,
             content,
             flags=re.MULTILINE | re.DOTALL,
         )
 
-        # 3b. Resolve @equation blocks for preview
+        # 3c. Resolve @equation blocks for preview
+        eq_counter = 0
+
         def equation_preview_repl(m: re.Match) -> str:
+            nonlocal eq_counter
+            eq_counter += 1
             body_text = m.group("body")
+            eq_id = m.group("id") or ""
+            trailer = m.group("trailer")
+            if trailer:
+                m_tr = re.search(r"\{#(?:eq:)?([A-Za-z0-9_\-]+)\}", trailer)
+                if m_tr:
+                    eq_id = m_tr.group(1)
+            if eq_id:
+                eq_id_map[eq_id] = eq_counter
+
             caption_raw = ""
             math_lines = []
             for line in body_text.splitlines():
@@ -215,16 +305,241 @@ class HTMLPreviewGenerator:
             math_content = "\n".join(math_lines).strip()
             if not math_content.startswith("$$"):
                 math_content = f"$$\n{math_content}\n$$"
+
+            anchor_tag = f'<span id="eq-{eq_id}" class="preview-eq-anchor"></span>' if eq_id else ""
             if caption_raw:
-                return f"\n{math_content}\n\nEquation: {caption_raw}\n"
-            return f"\n{math_content}\n"
+                return f"\n{anchor_tag}\n\n{math_content}\n\nEquation: {caption_raw}\n"
+            return f"\n{anchor_tag}\n\n{math_content}\n"
 
         content = re.sub(
-            r"^@equation(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n@end[ \t]*$",
+            r"^@equation(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
             equation_preview_repl,
             content,
             flags=re.MULTILINE | re.DOTALL,
         )
+
+        # 3d. Standalone equations with {#eq:id}
+        def display_eq_repl(m: re.Match) -> str:
+            nonlocal eq_counter
+            eq_counter += 1
+            math_expr = m.group(1).strip()
+            eq_id = m.group(2).strip()
+            eq_id_map[eq_id] = eq_counter
+            return f'\n\n<span id="eq-{eq_id}" class="preview-eq-anchor"></span>\n\n{math_expr}\n\n'
+
+        content = re.sub(
+            r"(\$\$.*?\$\$)[ \t]*\{#(?:eq:)?([A-Za-z0-9_\-]+)\}",
+            display_eq_repl,
+            content,
+            flags=re.DOTALL,
+        )
+
+        # 3e. Section headings with {#sec:id}
+        def heading_repl(m: re.Match) -> str:
+            hashes = m.group(1)
+            title = m.group(2).strip()
+            sec_id = m.group(3).strip()
+            sec_id_map[sec_id] = title
+            return f'\n{hashes} <span id="sec-{sec_id}">{title}</span>\n'
+
+        content = re.sub(
+            r"^(\#{1,6})[ \t]+(.*?)[ \t]+\{\#(?:sec:)?([A-Za-z0-9_\-]+)\}[ \t]*$",
+            heading_repl,
+            content,
+            flags=re.MULTILINE,
+        )
+
+        # 3f. Resolve @references / @bibliography for preview
+        def references_preview_repl(m: re.Match) -> str:
+            body_text = m.group("body")
+            entries = parse_reference_entries(body_text)
+            if not entries:
+                return ""
+            items = []
+            for idx, entry in enumerate(entries, start=1):
+                key = entry.get("key", "")
+                text = entry.get("text", "")
+                bib_id_map[key] = idx
+                items.append(
+                    f'<li id="ref-{key}" class="preview-reference-item">'
+                    f'<span class="ref-num">[{idx}]</span> '
+                    f'<span class="ref-text">{text}</span>'
+                    f'</li>'
+                )
+            items_html = "\n".join(items)
+            return (
+                f'\n<section class="preview-references" id="references">\n'
+                f'<h3>References</h3>\n'
+                f'<ol class="preview-references-list">\n{items_html}\n</ol>\n'
+                f'</section>\n'
+            )
+
+        content = re.sub(
+            r"^@(?:references|bibliography|biblography|bib)(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+            references_preview_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+
+        # 3g. In-text cross references and citations for preview
+        def fig_label_repl(m: re.Match) -> str:
+            prefix = m.group(1)
+            fid = m.group(2)
+            num = fig_id_map.get(fid, "?")
+            return f'{prefix} <a href="#fig-{fid}" class="preview-crossref">{num}</a>'
+
+        content = re.sub(
+            r"\b(Figure|Fig\.)[ \t]+@fig:([A-Za-z0-9_\-]+)",
+            fig_label_repl,
+            content,
+            flags=re.IGNORECASE,
+        )
+
+        def tbl_label_repl(m: re.Match) -> str:
+            prefix = m.group(1)
+            tid = m.group(2)
+            num = tbl_id_map.get(tid, "?")
+            return f'{prefix} <a href="#tbl-{tid}" class="preview-crossref">{num}</a>'
+
+        content = re.sub(
+            r"\b(Table|Tbl\.)[ \t]+@tbl:([A-Za-z0-9_\-]+)",
+            tbl_label_repl,
+            content,
+            flags=re.IGNORECASE,
+        )
+
+        def eq_label_repl(m: re.Match) -> str:
+            prefix = m.group(1)
+            eid = m.group(2)
+            num = eq_id_map.get(eid, "?")
+            return f'{prefix} <a href="#eq-{eid}" class="preview-crossref">({num})</a>'
+
+        content = re.sub(
+            r"\b(Equation|Eq\.)[ \t]+@eq:([A-Za-z0-9_\-]+)",
+            eq_label_repl,
+            content,
+            flags=re.IGNORECASE,
+        )
+
+        def sec_label_repl(m: re.Match) -> str:
+            prefix = m.group(1)
+            sid = m.group(2)
+            title = sec_id_map.get(sid, sid)
+            return f'{prefix} <a href="#sec-{sid}" class="preview-crossref">{title}</a>'
+
+        content = re.sub(
+            r"\b(Section|Sec\.)[ \t]+@sec:([A-Za-z0-9_\-]+)",
+            sec_label_repl,
+            content,
+            flags=re.IGNORECASE,
+        )
+
+        # Multi-citations
+        def preview_multi_cite_repl(m: re.Match) -> str:
+            keys = [
+                re.sub(r"^(?:cite:|bib:)?", "", k.strip().lstrip("@"))
+                for k in re.split(r"[,;]\s*", m.group(1))
+                if k.strip()
+            ]
+            links = [
+                f'<a href="#ref-{k}" class="preview-citation">{bib_id_map.get(k, k)}</a>'
+                for k in keys
+            ]
+            return f"[{', '.join(links)}]"
+
+        content = re.sub(
+            r"\[(@(?:cite:|bib:)?[A-Za-z0-9_\-]+(?:\s*[,;]\s*@(?:cite:|bib:)?[A-Za-z0-9_\-]+)+)\]",
+            preview_multi_cite_repl,
+            content,
+        )
+
+        def preview_single_cite_repl(m: re.Match) -> str:
+            k = m.group(1)
+            num = bib_id_map.get(k, k)
+            return f'<a href="#ref-{k}" class="preview-citation">[{num}]</a>'
+
+        content = re.sub(
+            r"\[@(?:cite:|bib:)?([A-Za-z0-9_\-]+)\]",
+            preview_single_cite_repl,
+            content,
+        )
+        content = re.sub(
+            r"@(?:cite|bib):([A-Za-z0-9_\-]+)",
+            preview_single_cite_repl,
+            content,
+        )
+
+        def preview_fig_bracket_repl(m: re.Match) -> str:
+            fid = m.group(1)
+            num = fig_id_map.get(fid, "?")
+            return f'(<a href="#fig-{fid}" class="preview-crossref">Figure {num}</a>)'
+
+        content = re.sub(r"\[@fig:([A-Za-z0-9_\-]+)\]", preview_fig_bracket_repl, content)
+
+        def preview_fig_num_repl(m: re.Match) -> str:
+            fid = m.group(1)
+            num = fig_id_map.get(fid, "?")
+            return f'<a href="#fig-{fid}" class="preview-crossref">{num}</a>'
+
+        content = re.sub(r"\[-@fig:([A-Za-z0-9_\-]+)\]", preview_fig_num_repl, content)
+
+        def preview_fig_repl(m: re.Match) -> str:
+            fid = m.group(1)
+            num = fig_id_map.get(fid, "?")
+            return f'<a href="#fig-{fid}" class="preview-crossref">Figure {num}</a>'
+
+        content = re.sub(r"@fig:([A-Za-z0-9_\-]+)", preview_fig_repl, content)
+
+        def preview_tbl_bracket_repl(m: re.Match) -> str:
+            tid = m.group(1)
+            num = tbl_id_map.get(tid, "?")
+            return f'(<a href="#tbl-{tid}" class="preview-crossref">Table {num}</a>)'
+
+        content = re.sub(r"\[@tbl:([A-Za-z0-9_\-]+)\]", preview_tbl_bracket_repl, content)
+
+        def preview_tbl_num_repl(m: re.Match) -> str:
+            tid = m.group(1)
+            num = tbl_id_map.get(tid, "?")
+            return f'<a href="#tbl-{tid}" class="preview-crossref">{num}</a>'
+
+        content = re.sub(r"\[-@tbl:([A-Za-z0-9_\-]+)\]", preview_tbl_num_repl, content)
+
+        def preview_tbl_repl(m: re.Match) -> str:
+            tid = m.group(1)
+            num = tbl_id_map.get(tid, "?")
+            return f'<a href="#tbl-{tid}" class="preview-crossref">Table {num}</a>'
+
+        content = re.sub(r"@tbl:([A-Za-z0-9_\-]+)", preview_tbl_repl, content)
+
+        def preview_eq_repl(m: re.Match) -> str:
+            eid = m.group(1)
+            num = eq_id_map.get(eid, "?")
+            return f'<a href="#eq-{eid}" class="preview-crossref">({num})</a>'
+
+        content = re.sub(r"\[@eq:([A-Za-z0-9_\-]+)\]", preview_eq_repl, content)
+        content = re.sub(r"@eq:([A-Za-z0-9_\-]+)", preview_eq_repl, content)
+
+        def preview_eq_num_repl(m: re.Match) -> str:
+            eid = m.group(1)
+            num = eq_id_map.get(eid, "?")
+            return f'<a href="#eq-{eid}" class="preview-crossref">{num}</a>'
+
+        content = re.sub(r"\[-@eq:([A-Za-z0-9_\-]+)\]", preview_eq_num_repl, content)
+
+        def preview_sec_bracket_repl(m: re.Match) -> str:
+            sid = m.group(1)
+            title = sec_id_map.get(sid, sid)
+            return f'(<a href="#sec-{sid}" class="preview-crossref">{title}</a>)'
+
+        content = re.sub(r"\[@sec:([A-Za-z0-9_\-]+)\]", preview_sec_bracket_repl, content)
+
+        def preview_sec_repl(m: re.Match) -> str:
+            sid = m.group(1)
+            title = sec_id_map.get(sid, sid)
+            return f'<a href="#sec-{sid}" class="preview-crossref">{title}</a>'
+
+        content = re.sub(r"\[-@sec:([A-Za-z0-9_\-]+)\]", preview_sec_repl, content)
+        content = re.sub(r"@sec:([A-Za-z0-9_\-]+)", preview_sec_repl, content)
 
         # 4. Compile markdown to HTML5 via Pandoc
         pandoc_bin = PandocRunner.get_pandoc_bin()
