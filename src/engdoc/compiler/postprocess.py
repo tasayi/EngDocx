@@ -16,6 +16,7 @@ MARKER_PREFIX = "ENGDOC_SECTION_MARKER:"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 NSMAP = {"w": W_NS, "wp": WP_NS, "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+SEQ_FIGURE_INSTR = " SEQ Figure \\* ARABIC "
 CAPTION_PREFIX_RE = re.compile(
     r"^(Figure(?:\s+[A-Za-z0-9_\-\.]+)?\s*[:\.\-]?\s*)(.*)$",
     re.IGNORECASE,
@@ -183,10 +184,13 @@ class DocxPostprocessor:
                 tmp_docx_path, "w", compression=zipfile.ZIP_DEFLATED
             ) as z_out:
                 names = set(z_in.namelist())
+                caption_style = cls._find_caption_style(
+                    z_in.read("word/styles.xml") if "word/styles.xml" in names else b""
+                )
                 for item in z_in.infolist():
                     data = z_in.read(item.filename)
                     if item.filename == "word/document.xml":
-                        data = cls._process_document_xml(data, current_layout)
+                        data = cls._process_document_xml(data, current_layout, caption_style)
                     elif item.filename.endswith(".rels"):
                         data = cls._drop_dangling_rels(item.filename, data, names)
                     z_out.writestr(item, data)
@@ -196,6 +200,19 @@ class DocxPostprocessor:
         finally:
             if tmp_docx_path.exists():
                 tmp_docx_path.unlink()
+
+    @classmethod
+    def _find_caption_style(cls, styles_xml: bytes) -> str:
+        """Returns the template's caption paragraph style id."""
+        if styles_xml:
+            ids = {
+                s.get(f"{{{W_NS}}}styleId")
+                for s in etree.fromstring(styles_xml).findall(f"{{{W_NS}}}style")
+            }
+            for candidate in ("Caption", "ImageCaption"):
+                if candidate in ids:
+                    return candidate
+        return "Caption"
 
     @classmethod
     def _drop_dangling_rels(cls, rels_name: str, data: bytes, names: set[str]) -> bytes:
@@ -223,6 +240,7 @@ class DocxPostprocessor:
         cls,
         xml_bytes: bytes,
         initial_layout: SectionLayout,
+        caption_style: str = "Caption",
     ) -> bytes:
         """Transforms word/document.xml with section properties and figure styling."""
         root = etree.fromstring(xml_bytes)
@@ -232,6 +250,7 @@ class DocxPostprocessor:
 
         # 1. Process figure drawings and captions for centering and bold labels
         all_paragraphs = list(body.findall(f"{{{W_NS}}}p"))
+        figure_number = 0
         for i, p in enumerate(all_paragraphs):
             drawings = p.xpath(".//w:drawing", namespaces=NSMAP)
             if drawings:
@@ -294,7 +313,7 @@ class DocxPostprocessor:
                             next_p.insert(0, next_pPr)
                         if pStyle is None:
                             pStyle = etree.SubElement(next_pPr, f"{{{W_NS}}}pStyle")
-                        pStyle.set(f"{{{W_NS}}}val", "Caption")
+                        pStyle.set(f"{{{W_NS}}}val", caption_style)
 
                         # Align caption to match figure alignment
                         next_jc = next_pPr.find(f"{{{W_NS}}}jc")
@@ -302,22 +321,9 @@ class DocxPostprocessor:
                             next_jc = etree.SubElement(next_pPr, f"{{{W_NS}}}jc")
                         next_jc.set(f"{{{W_NS}}}val", alignment)
 
-                        # Standard caption spacing: 60 dxa before, 180 dxa after
-                        spacing = next_pPr.find(f"{{{W_NS}}}spacing")
-                        if spacing is None:
-                            spacing = etree.SubElement(next_pPr, f"{{{W_NS}}}spacing")
-                        spacing.set(f"{{{W_NS}}}before", "60")
-                        spacing.set(f"{{{W_NS}}}after", "180")
-
-                        # 10pt font size on paragraph default
-                        pPr_rPr = next_pPr.find(f"{{{W_NS}}}rPr")
-                        if pPr_rPr is None:
-                            pPr_rPr = etree.Element(f"{{{W_NS}}}rPr")
-                            next_pPr.append(pPr_rPr)
-                        cls._ensure_font_size(pPr_rPr, "20")
-
                         cls._sort_pPr(next_pPr)
-                        cls._format_caption_runs(next_p)
+                        figure_number += 1
+                        cls._make_caption_runs(next_p, figure_number)
 
         # 2. Extract terminal sectPr to use as template for headers/footers
         terminal_sect_pr = body.find(f"{{{W_NS}}}sectPr")

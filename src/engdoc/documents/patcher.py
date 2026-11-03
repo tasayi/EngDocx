@@ -323,6 +323,7 @@ class DocxPatcher:
                 action=action,
                 target=target,
             )
+            DocxPostprocessor.renumber_figure_fields(body_elem)
 
             # 6. Write patched document atomically to output_docx
             output_path.parent.mkdir(parents=True, exist_ok=True)
