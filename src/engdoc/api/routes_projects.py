@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -15,6 +16,7 @@ from engdoc.project.models import (
     FileContentResponse,
     OpenProjectRequest,
     ProjectManifest,
+    ReorderDocumentsRequest,
     ResourceTreeResponse,
     SaveFileRequest,
     SessionStatusResponse,
@@ -206,6 +208,20 @@ async def delete_project_file(session_id: str, path: str = Query(..., descriptio
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
     except ProjectArchiveError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+@router.put("/{session_id}/documents/reorder")
+async def reorder_project_documents(
+    session_id: str, req: ReorderDocumentsRequest
+) -> dict[str, Any]:
+    """Reorders the sequence of documents in the project manifest."""
+    try:
+        session = SessionManager.get_session(session_id)
+        new_order = session.reorder_documents(req.documents)
+        return {"status": "reordered", "documents": new_order}
+    except ProjectArchiveError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except SecurityPathError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
 
 @router.put("/{session_id}/manifest", response_model=ProjectManifest)
 async def update_project_manifest(session_id: str, req: UpdateManifestRequest) -> ProjectManifest:

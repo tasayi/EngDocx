@@ -54,6 +54,10 @@ created_at: "2026-11-01T09:00:00Z"
 updated_at: "2026-11-01T09:30:00Z"
 
 entry_point: "content/main.md"
+documents:
+  - "content/01_introduction.md"
+  - "content/02_analysis.md"
+  - "content/03_conclusion.md"
 
 template:
   default: "templates/technical_report.docx"
@@ -82,6 +86,7 @@ build:
 | `created_at` | String (ISO 8601) | Yes | Creation timestamp. |
 | `updated_at` | String (ISO 8601) | Yes | Last modified timestamp. |
 | `entry_point` | String | Yes | Relative path to the primary Markdown entry file. |
+| `documents` | List[String] | No | Ordered sequence of content Markdown files assembled during compilation and publishing. |
 | `template.default`| String | No | Relative path to the default DOCX reference template. |
 
 ---

@@ -66,8 +66,30 @@ Opens an existing `.mdoc` file into an isolated temporary working directory.
 ### `GET /api/projects/{session_id}/file?path=content/main.md`
 Reads the text content of a file within the project session workspace.
 
+### `POST /api/projects/{session_id}/file`
+Creates a new file within the workspace. When creating a Markdown file in `content/`, it is automatically appended to the ordered `manifest.documents` list.
+- **Request Body**: `{"path": "content/02_chapter2.md", "content": "# Chapter 2\n"}`
+
 ### `PUT /api/projects/{session_id}/file`
 Writes updated text content into a file within the workspace.
+
+### `DELETE /api/projects/{session_id}/file?path=content/02_chapter2.md`
+Deletes a file from the workspace. Automatically removes it from `manifest.documents` (protecting against deleting the designated entry point).
+
+### `PUT /api/projects/{session_id}/documents/reorder`
+Updates and persists the compilation sequence of modular chapter documents in `manifest.yaml`.
+- **Request Body**: `{"documents": ["content/01_intro.md", "content/02_subsystems.md", "content/03_link_budget.md"]}`
+- **Response `200 OK`**:
+  ```json
+  {
+    "status": "reordered",
+    "documents": [
+      "content/01_intro.md",
+      "content/02_subsystems.md",
+      "content/03_link_budget.md"
+    ]
+  }
+  ```
 
 ### `POST /api/projects/{session_id}/save`
 Atomically packages and saves the active project workspace back into the `.mdoc` ZIP archive.

@@ -91,11 +91,13 @@
       <aside id="panel-navigator" class="panel resizable-panel">
         <div class="panel-header">
           <span>Project Navigator</span>
-          <button class="icon-btn" id="btn-new-file" title="Create New Document in Project">+</button>
         </div>
         <div class="panel-content">
           <div class="tree-group">
-            <div class="tree-title">📄 Documents</div>
+            <div class="tree-title" style="display: flex; justify-content: space-between; align-items: center;">
+              <span>📄 Documents</span>
+              <button class="icon-btn" id="btn-new-file" title="Add Document / Chapter">+</button>
+            </div>
             <ul id="tree-documents" class="tree-list">
               <li class="empty-hint">No project loaded.</li>
             </ul>

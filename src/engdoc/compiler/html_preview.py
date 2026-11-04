@@ -128,6 +128,93 @@ class HTMLPreviewGenerator:
         sec_id_map: dict[str, str] = {}
         bib_id_map: dict[str, int] = {}
 
+        # Pre-scan project workspace if available for global cross-file symbols
+        if workspace_dir:
+            try:
+                manifest_file = workspace_dir / "manifest.yaml"
+                if manifest_file.is_file():
+                    import yaml
+
+                    m_data = yaml.safe_load(manifest_file.read_text(encoding="utf-8")) or {}
+                    doc_list = m_data.get("documents") or [
+                        m_data.get("entry_point", "content/main.md")
+                    ]
+                    p_fig_c = 0
+                    p_tbl_c = 0
+                    p_eq_c = 0
+                    p_bib_c = 0
+                    for rel_doc in doc_list:
+                        doc_p = workspace_dir / rel_doc
+                        if doc_p.is_file():
+                            d_txt = doc_p.read_text(encoding="utf-8")
+                            for fm in re.finditer(
+                                r"^@figure(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+                                d_txt,
+                                re.M | re.S,
+                            ):
+                                p_fig_c += 1
+                                fid = fm.group("id") or f"FIG-{p_fig_c:03d}"
+                                fig_id_map[fid] = p_fig_c
+                                tr = fm.group("trailer")
+                                if tr:
+                                    m_al = re.search(r"\{#(?:fig:)?([A-Za-z0-9_\-]+)\}", tr)
+                                    if m_al:
+                                        fig_id_map[m_al.group(1)] = p_fig_c
+
+                            for tm in re.finditer(
+                                r"^@table(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+                                d_txt,
+                                re.M | re.S,
+                            ):
+                                p_tbl_c += 1
+                                tid, _, _ = parse_table_params(
+                                    tm.group("header"), tm.group("body"), tm.group("trailer")
+                                )
+                                tid = tid or f"tbl-{p_tbl_c:03d}"
+                                tbl_id_map[tid] = p_tbl_c
+
+                            for em in re.finditer(
+                                r"^@equation(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+                                d_txt,
+                                re.M | re.S,
+                            ):
+                                p_eq_c += 1
+                                eid = em.group("id") or ""
+                                tr = em.group("trailer")
+                                if tr:
+                                    m_tr = re.search(r"\{#(?:eq:)?([A-Za-z0-9_\-]+)\}", tr)
+                                    if m_tr:
+                                        eid = m_tr.group(1)
+                                if eid:
+                                    eq_id_map[eid] = p_eq_c
+
+                            for sm in re.finditer(
+                                r"(\$\$.*?\$\$)[ \t]*\{#(?:eq:)?([A-Za-z0-9_\-]+)\}",
+                                d_txt,
+                                re.S,
+                            ):
+                                p_eq_c += 1
+                                eq_id_map[sm.group(2).strip()] = p_eq_c
+
+                            for hm in re.finditer(
+                                r"^(\#{1,6})[ \t]+(.*?)[ \t]+\{\#(?:sec:)?([A-Za-z0-9_\-]+)\}[ \t]*$",
+                                d_txt,
+                                re.M,
+                            ):
+                                sec_id_map[hm.group(3).strip()] = hm.group(2).strip()
+
+                            for rm in re.finditer(
+                                r"^@(?:references|bibliography|biblography|bib)(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
+                                d_txt,
+                                re.M | re.S,
+                            ):
+                                entries = parse_reference_entries(rm.group("body"))
+                                for e in entries:
+                                    p_bib_c += 1
+                                    bib_id_map[e.get("key", "")] = p_bib_c
+            except Exception:
+                pass
+
         # 3a. Resolve @table blocks for preview
         tbl_counter = 0
 

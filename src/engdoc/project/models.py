@@ -51,9 +51,25 @@ class ProjectManifest(BaseModel):
     entry_point: str = Field(
         default="content/main.md", description="Relative path to markdown entry point"
     )
+    documents: list[str] = Field(
+        default_factory=list, description="Ordered list of relative markdown document paths"
+    )
     template: ProjectTemplateConfig = Field(default_factory=ProjectTemplateConfig)
     resources: ProjectResources = Field(default_factory=ProjectResources)
     build: BuildSettings = Field(default_factory=BuildSettings)
+
+    @field_validator("documents")
+    @classmethod
+    def validate_documents(cls, v: list[str]) -> list[str]:
+        cleaned = []
+        for item in v:
+            p = Path(item)
+            if p.is_absolute() or ".." in p.parts:
+                raise ValueError(f"Document path '{item}' must be a safe relative path.")
+            if not item.endswith((".md", ".emd")):
+                raise ValueError(f"Document path '{item}' must point to a markdown (.md / .emd) file.")
+            cleaned.append(item.replace("\\", "/"))
+        return cleaned
 
     @field_validator("entry_point")
     @classmethod
@@ -119,6 +135,10 @@ class UpdateManifestRequest(BaseModel):
     revision: str | None = None
     entry_point: str | None = None
     default_template: str | None = None
+    documents: list[str] | None = None
+
+class ReorderDocumentsRequest(BaseModel):
+    documents: list[str]
 
 class SessionStatusResponse(BaseModel):
     session_id: str

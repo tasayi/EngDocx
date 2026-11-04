@@ -79,18 +79,114 @@ class ProjectState {
       if (!this.tree.documents || this.tree.documents.length === 0) {
         treeDocs.innerHTML = '<li class="empty-hint">No documents found.</li>';
       } else {
-        this.tree.documents.forEach((doc) => {
+        const totalDocs = this.tree.documents.length;
+        this.tree.documents.forEach((doc, idx) => {
           const li = document.createElement('li');
+          li.className = 'tree-doc-item';
           li.dataset.path = doc.path;
+          li.dataset.index = idx.toString();
+          li.draggable = true;
+
           const isMaster = doc.is_master || (this.manifest && doc.path === this.manifest.entry_point);
           const label = isMaster ? `★ ${doc.name} [Master]` : doc.name;
-          li.innerHTML = `<span class="tree-icon">📝</span> ${label}`;
+
+          li.innerHTML = `
+            <div class="doc-item-main">
+              <span class="drag-handle" title="Drag to reorder compilation sequence">⋮⋮</span>
+              <span class="tree-icon">📝</span>
+              <span class="doc-name" title="${doc.path}">${label}</span>
+            </div>
+            <div class="doc-item-actions">
+              <button class="btn-doc-action btn-doc-up" title="Move Earlier in Compilation Sequence" ${idx === 0 ? 'disabled' : ''}>↑</button>
+              <button class="btn-doc-action btn-doc-down" title="Move Later in Compilation Sequence" ${idx === totalDocs - 1 ? 'disabled' : ''}>↓</button>
+              ${totalDocs > 1 && !isMaster ? `<button class="btn-doc-action btn-doc-delete" title="Delete Document">×</button>` : ''}
+            </div>
+          `;
+
           if (isMaster) {
             li.title = `${doc.path} (Master Entry Point Document)`;
-            li.style.fontWeight = '600';
+            li.classList.add('master-doc');
           }
           if (this.activeTab === doc.path) li.classList.add('active');
-          li.addEventListener('click', () => this.openDocument(doc.path));
+
+          // Clicking label opens document
+          const mainDiv = li.querySelector('.doc-item-main');
+          mainDiv?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.openDocument(doc.path);
+          });
+
+          // Up arrow
+          const btnUp = li.querySelector('.btn-doc-up');
+          btnUp?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (idx > 0) {
+              const items = [...this.tree.documents];
+              const temp = items[idx];
+              items[idx] = items[idx - 1];
+              items[idx - 1] = temp;
+              await this.reorderDocuments(items.map((d) => d.path));
+            }
+          });
+
+          // Down arrow
+          const btnDown = li.querySelector('.btn-doc-down');
+          btnDown?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (idx < totalDocs - 1) {
+              const items = [...this.tree.documents];
+              const temp = items[idx];
+              items[idx] = items[idx + 1];
+              items[idx + 1] = temp;
+              await this.reorderDocuments(items.map((d) => d.path));
+            }
+          });
+
+          // Delete button
+          const btnDel = li.querySelector('.btn-doc-delete');
+          btnDel?.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (confirm(`Are you sure you want to delete "${doc.name}" from the project?`)) {
+              await this.deleteDocument(doc.path);
+            }
+          });
+
+          // HTML5 Drag and drop reordering
+          li.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', idx.toString());
+            e.dataTransfer.effectAllowed = 'move';
+            li.classList.add('dragging');
+          });
+
+          li.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            li.classList.add('drag-over');
+          });
+
+          li.addEventListener('dragleave', () => {
+            li.classList.remove('drag-over');
+          });
+
+          li.addEventListener('dragend', () => {
+            li.classList.remove('dragging');
+            treeDocs.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
+          });
+
+          li.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            li.classList.remove('drag-over');
+            const fromStr = e.dataTransfer.getData('text/plain');
+            const fromIndex = parseInt(fromStr, 10);
+            const toIndex = idx;
+            if (!isNaN(fromIndex) && fromIndex !== toIndex && fromIndex >= 0 && fromIndex < totalDocs) {
+              const items = [...this.tree.documents];
+              const [movedItem] = items.splice(fromIndex, 1);
+              items.splice(toIndex, 0, movedItem);
+              await this.reorderDocuments(items.map((d) => d.path));
+            }
+          });
+
           treeDocs.appendChild(li);
         });
       }
@@ -568,6 +664,47 @@ class ProjectState {
       await this.openDocument(path);
     } catch (err) {
       alert(`Failed to create file: ${err.message}`);
+    }
+  }
+
+  async reorderDocuments(orderedPaths) {
+    if (!this.sessionId) return;
+    try {
+      const res = await fetch(`/api/projects/${this.sessionId}/documents/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documents: orderedPaths }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (this.manifest) {
+        this.manifest.documents = data.documents;
+      }
+      await this.refreshTree();
+    } catch (err) {
+      alert(`Failed to reorder documents: ${err.message}`);
+    }
+  }
+
+  async deleteDocument(path) {
+    if (!this.sessionId) return;
+    try {
+      const res = await fetch(`/api/projects/${this.sessionId}/file?path=${encodeURIComponent(path)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      await this.refreshTree();
+      if (this.activeTab === path && this.tree.documents && this.tree.documents.length > 0) {
+        await this.openDocument(this.tree.documents[0].path);
+      }
+    } catch (err) {
+      alert(`Failed to delete document: ${err.message}`);
     }
   }
 

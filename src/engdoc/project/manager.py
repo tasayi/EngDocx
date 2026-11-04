@@ -117,6 +117,8 @@ class ProjectManager:
         tmp_path = Path(tmp_path_str)
 
         try:
+            if not manifest.documents:
+                manifest.documents = [manifest.entry_point]
             with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 # 1. manifest.yaml
                 manifest_dict = manifest.model_dump()

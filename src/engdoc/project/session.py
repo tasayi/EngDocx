@@ -88,6 +88,49 @@ class ProjectSession:
 
         raise ProjectArchiveError(f"Asset file not found in project workspace: {rel_path}")
 
+    def get_ordered_documents(self) -> list[Path]:
+        """Returns the list of document Paths in the sequence specified by manifest.documents."""
+        # Discover all markdown documents on disk in content/
+        on_disk_docs: dict[str, Path] = {}
+        content_dir = self.workspace_dir / "content"
+        if content_dir.is_dir():
+            for root, _, files in os.walk(content_dir):
+                for f in sorted(files):
+                    f_path = Path(root) / f
+                    if f_path.suffix.lower() in (".md", ".emd"):
+                        rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
+                        on_disk_docs[rel] = f_path
+
+        # If manifest.documents is empty, initialize with entry_point + remaining files
+        if not self.manifest.documents:
+            ordered: list[str] = []
+            if self.manifest.entry_point in on_disk_docs:
+                ordered.append(self.manifest.entry_point)
+            for k in sorted(on_disk_docs.keys()):
+                if k not in ordered:
+                    ordered.append(k)
+            self.manifest.documents = ordered
+            self._save_manifest_yaml()
+        else:
+            # Append any untracked on-disk documents so none are lost
+            updated = False
+            for k in sorted(on_disk_docs.keys()):
+                if k not in self.manifest.documents:
+                    self.manifest.documents.append(k)
+                    updated = True
+            if updated:
+                self._save_manifest_yaml()
+
+        resolved: list[Path] = []
+        for rel in self.manifest.documents:
+            if rel in on_disk_docs:
+                resolved.append(on_disk_docs[rel])
+            else:
+                target = self.workspace_dir / rel
+                if target.is_file():
+                    resolved.append(target)
+        return resolved
+
     def get_tree(self) -> ResourceTreeResponse:
         """Constructs a categorical tree of all project assets and documents."""
         documents: list[TreeItem] = []
@@ -95,24 +138,21 @@ class ProjectSession:
         templates: list[TreeItem] = []
         metadata: list[TreeItem] = []
 
-        # 1. Documents (content/)
-        content_dir = self.workspace_dir / "content"
-        if content_dir.is_dir():
-            for root, _, files in os.walk(content_dir):
-                for f in sorted(files):
-                    f_path = Path(root) / f
-                    rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
-                    is_master = (rel == self.manifest.entry_point)
-                    documents.append(
-                        TreeItem(
-                            name=f,
-                            path=rel,
-                            item_type="file",
-                            category="document",
-                            size_bytes=f_path.stat().st_size,
-                            is_master=is_master,
-                        )
-                    )
+        # 1. Documents (ordered according to manifest.documents)
+        ordered_doc_paths = self.get_ordered_documents()
+        for idx, f_path in enumerate(ordered_doc_paths):
+            rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
+            is_master = (rel == self.manifest.entry_point) or (idx == 0 and not any(d.is_master for d in documents))
+            documents.append(
+                TreeItem(
+                    name=f_path.name,
+                    path=rel,
+                    item_type="file",
+                    category="document",
+                    size_bytes=f_path.stat().st_size,
+                    is_master=is_master,
+                )
+            )
 
         # 2. Figures (figures/ and assets/figures/)
         seen_fig_paths: set[str] = set()
@@ -228,6 +268,15 @@ class ProjectSession:
         if rel_path == "manifest.yaml":
             self.manifest = ProjectManager.parse_manifest_yaml(content)
 
+    def _save_manifest_yaml(self) -> None:
+        """Serializes current in-memory manifest to manifest.yaml and marks session dirty."""
+        manifest_path = self.workspace_dir / "manifest.yaml"
+        self.manifest.updated_at = datetime.now(UTC).isoformat()
+        manifest_dict = self.manifest.model_dump()
+        manifest_path.write_text(yaml.safe_dump(manifest_dict, sort_keys=False), encoding="utf-8")
+        self.is_dirty = True
+        self.dirty_files.add("manifest.yaml")
+
     def create_file(self, rel_path: str, content: str = "") -> None:
         """Creates a new file in the project workspace."""
         target = self._resolve_safe_path(rel_path)
@@ -237,6 +286,13 @@ class ProjectSession:
         target.write_text(content, encoding="utf-8")
         self.is_dirty = True
         self.dirty_files.add(rel_path)
+
+        # If creating a markdown document in content/, register it in manifest.documents
+        clean_rel = rel_path.replace("\\", "/").strip()
+        if clean_rel.startswith("content/") and clean_rel.endswith((".md", ".emd")):
+            if clean_rel not in self.manifest.documents:
+                self.manifest.documents.append(clean_rel)
+                self._save_manifest_yaml()
 
     def delete_file(self, rel_path: str) -> None:
         """Deletes a file from the project workspace."""
@@ -248,6 +304,38 @@ class ProjectSession:
         target.unlink()
         self.is_dirty = True
         self.dirty_files.add(rel_path)
+
+        # Remove from manifest.documents if registered
+        clean_rel = rel_path.replace("\\", "/").strip()
+        if clean_rel in self.manifest.documents:
+            self.manifest.documents.remove(clean_rel)
+            self._save_manifest_yaml()
+
+    def reorder_documents(self, documents: list[str]) -> list[str]:
+        """Reorders documents in the manifest according to the provided list."""
+        validated: list[str] = []
+        for doc in documents:
+            clean_doc = doc.replace("\\", "/").strip()
+            target = self._resolve_safe_path(clean_doc)
+            if not target.is_file():
+                raise ProjectArchiveError(f"Document file does not exist: {clean_doc}")
+            if clean_doc not in validated:
+                validated.append(clean_doc)
+
+        # Ensure any untracked on-disk documents from content/ are not dropped
+        content_dir = self.workspace_dir / "content"
+        if content_dir.is_dir():
+            for root, _, files in os.walk(content_dir):
+                for f in sorted(files):
+                    f_path = Path(root) / f
+                    if f_path.suffix.lower() in (".md", ".emd"):
+                        rel = str(f_path.relative_to(self.workspace_dir)).replace("\\", "/")
+                        if rel not in validated:
+                            validated.append(rel)
+
+        self.manifest.documents = validated
+        self._save_manifest_yaml()
+        return self.manifest.documents
 
     def update_manifest(self, req: UpdateManifestRequest) -> ProjectManifest:
         """Updates manifest fields, rewrites manifest.yaml, and marks session dirty."""
@@ -266,6 +354,8 @@ class ProjectSession:
             if "template" not in current_data or not isinstance(current_data["template"], dict):
                 current_data["template"] = {}
             current_data["template"]["default"] = req.default_template
+        if req.documents is not None:
+            current_data["documents"] = req.documents
 
         current_data["updated_at"] = datetime.now(UTC).isoformat()
 
@@ -349,6 +439,8 @@ class SessionManager:
         temp_dir = Path(tempfile.mkdtemp(prefix=f"engdoc_sess_{session_id[:8]}_"))
 
         # Initialize project boilerplate in temp_dir
+        if not manifest.documents:
+            manifest.documents = [manifest.entry_point]
         manifest_file = temp_dir / "manifest.yaml"
         manifest_file.write_text(yaml.safe_dump(manifest.model_dump(), sort_keys=False), encoding="utf-8")
 

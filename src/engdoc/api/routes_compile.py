@@ -76,18 +76,16 @@ async def generate_preview(req: PreviewRequest) -> PreviewResponse:
 
     text = req.content
     if text is None:
-        entry_file = session.workspace_dir / session.manifest.entry_point
+        ordered_docs = session.get_ordered_documents()
         content_parts = []
-        if entry_file.is_file():
-            content_parts.append(entry_file.read_text(encoding="utf-8"))
-        content_dir = session.workspace_dir / "content"
-        if content_dir.is_dir():
-            import os
-            for root, _, files in os.walk(content_dir):
-                for f in sorted(files):
-                    f_path = Path(root) / f
-                    if f_path.suffix.lower() in (".md", ".emd") and f_path != entry_file:
-                        content_parts.append(f"\n\n@pagebreak\n\n{f_path.read_text(encoding='utf-8')}")
+        for i, doc_path in enumerate(ordered_docs):
+            file_text = doc_path.read_text(encoding="utf-8")
+            if i == 0:
+                content_parts.append(file_text)
+            else:
+                from engdoc.markup.parser import EMDParser
+                _, body_content = EMDParser.parse_frontmatter(file_text)
+                content_parts.append(f"\n\n@pagebreak\n\n{body_content.strip()}")
         text = "\n".join(content_parts)
 
     preview_payload = await HTMLPreviewGenerator.generate_preview(
