@@ -103,6 +103,20 @@ if pandoc_dir.is_dir():
 '''
 
 
+def _entrypoint() -> str:
+    """Return the packaged CLI entry point, defaulting to the web workspace."""
+    return '''\
+import sys
+
+from engdoc.cli.main import main
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        sys.argv.append("serve")
+    main()
+'''
+
+
 def _build_command(
     *,
     entrypoint: Path,
@@ -187,7 +201,7 @@ def build(*, dry_run: bool = False) -> Path | None:
 
     entrypoint = support_dir / "engdoc_entry.py"
     entrypoint.write_text(
-        "from engdoc.cli.main import main\n\nif __name__ == '__main__':\n    main()\n",
+        _entrypoint(),
         encoding="utf-8",
     )
     runtime_hook = support_dir / "pyi_rth_engdoc.py"
