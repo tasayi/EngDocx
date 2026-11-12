@@ -53,6 +53,19 @@ uv run engdoc serve
 
 The authoring interface will open automatically in your browser at `http://127.0.0.1:8000`.
 
+### Build a standalone executable
+
+Install the packaging extra and build for the current operating system and CPU architecture:
+
+```bash
+uv sync --extra packaging
+uv run python gen_dist.py
+```
+
+The one-file console executable is written to `dist/<platform>-<architecture>/` (`engdoc.exe` on Windows, `engdoc` on Linux/macOS). PyInstaller does not cross-compile: run the build on each OS and architecture you intend to distribute. Pandoc is bundled; PDF and some vector-conversion features still require separately installed LibreOffice, Inkscape, or Microsoft Word. Use `uv run python gen_dist.py --help` for build options.
+
+Launching the executable without arguments (including double-clicking it on Windows) starts the web workspace and opens a browser. The console remains open while the server runs; close it or press Ctrl+C to stop the server. Explicit commands, such as `engdoc serve --no-browser`, `engdoc doctor`, and `engdoc --help`, remain available.
+
 ---
 
 ## 3. Command-Line Interface (`engdoc`)

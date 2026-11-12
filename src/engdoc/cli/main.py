@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import shutil
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 
@@ -267,10 +268,12 @@ def cli_serve(args: argparse.Namespace) -> int:
     print(f"  URL: {url}")
     print("========================================================\n")
 
+    browser_timer = None
     if not args.no_browser:
-        # Schedule opening browser shortly after start
-        loop = asyncio.new_event_loop()
-        loop.call_later(1.0, lambda: webbrowser.open(url))
+        # Uvicorn owns its event loop, so schedule browser launch independently.
+        browser_timer = threading.Timer(1.0, webbrowser.open, args=(url,))
+        browser_timer.daemon = True
+        browser_timer.start()
 
     try:
         uvicorn.run(
@@ -285,6 +288,9 @@ def cli_serve(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\n[INFO] EngDoc server shut down cleanly.")
         return 0
+    finally:
+        if browser_timer:
+            browser_timer.cancel()
 
 
 def build_parser() -> argparse.ArgumentParser:

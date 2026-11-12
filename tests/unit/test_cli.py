@@ -1,6 +1,8 @@
 """Unit tests for the EngDoc unified Command-Line Interface (CLI)."""
 
+import importlib
 from pathlib import Path
+from unittest.mock import Mock
 
 from engdoc.cli.main import build_parser, cli_build, cli_doctor, cli_inspect, cli_new, cli_patch
 from tests.unit.test_docx_inspector import create_rich_test_docx
@@ -104,4 +106,35 @@ def test_cli_build_missing_file():
     args = parser.parse_args(["build", "non_existent.mdoc"])
     exit_code = cli_build(args)
     assert exit_code == 1
+
+
+def test_cli_serve_schedules_browser_and_cleans_up(monkeypatch):
+    cli_module = importlib.import_module("engdoc.cli.main")
+    timer = Mock()
+    timer_factory = Mock(return_value=timer)
+    open_browser = Mock()
+    run_server = Mock()
+    monkeypatch.setattr(cli_module.threading, "Timer", timer_factory)
+    monkeypatch.setattr(cli_module.webbrowser, "open", open_browser)
+    monkeypatch.setattr("uvicorn.run", run_server)
+
+    args = build_parser().parse_args(["serve", "--port", "8765"])
+    assert cli_module.cli_serve(args) == 0
+
+    timer_factory.assert_called_once_with(1.0, open_browser, args=("http://127.0.0.1:8765",))
+    assert timer.daemon is True
+    timer.start.assert_called_once_with()
+    timer.cancel.assert_called_once_with()
+    run_server.assert_called_once()
+
+
+def test_cli_serve_no_browser(monkeypatch):
+    cli_module = importlib.import_module("engdoc.cli.main")
+    timer_factory = Mock()
+    monkeypatch.setattr(cli_module.threading, "Timer", timer_factory)
+    monkeypatch.setattr("uvicorn.run", Mock())
+
+    args = build_parser().parse_args(["serve", "--no-browser"])
+    assert cli_module.cli_serve(args) == 0
+    timer_factory.assert_not_called()
 
