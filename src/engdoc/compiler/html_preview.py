@@ -13,9 +13,11 @@ from engdoc.figures.service import format_figure_caption
 from engdoc.markup.parser import (
     EMDParser,
     convert_tsv_tables,
+    parse_embedded_figure,
     parse_reference_entries,
     parse_section_params,
     parse_table_params,
+    replace_directive_blocks,
 )
 
 
@@ -217,13 +219,11 @@ class HTMLPreviewGenerator:
 
         # 3a. Resolve @table blocks for preview
         tbl_counter = 0
+        fig_counter = 0
 
-        def table_preview_repl(m: re.Match) -> str:
-            nonlocal tbl_counter
+        def table_preview_repl(h: str, b: str, tr: str) -> str:
+            nonlocal tbl_counter, fig_counter
             tbl_counter += 1
-            h = m.group("header")
-            b = m.group("body")
-            tr = m.group("trailer")
             tbl_id, params, tbl_md = parse_table_params(h, b, tr)
             tbl_id = tbl_id or f"tbl-{tbl_counter:03d}"
             tbl_id_map[tbl_id] = tbl_counter
@@ -252,24 +252,89 @@ class HTMLPreviewGenerator:
             if highlight_first:
                 classes.append("highlight-first")
 
+            if "@figure" in tbl_md:
+                cell_chunks = [
+                    c.strip()
+                    for c in re.split(
+                        r"(?:^\s*\|\s*$|\n\s*\|\s*\n|^\s*\|\s*|\s*\|\s*$)",
+                        tbl_md,
+                        flags=re.MULTILINE,
+                    )
+                    if c.strip()
+                ]
+                tds = []
+                num_cells = max(1, len(cell_chunks))
+                col_width = f"{100 // num_cells}%"
+                for cell in cell_chunks:
+                    if "@figure" in cell:
+                        fig_info = parse_embedded_figure(cell)
+                        if fig_info:
+                            fig_counter += 1
+                            fid = fig_info.get("id") or f"FIG-{fig_counter:03d}"
+                            falias = fig_info.get("alias", "")
+                            fcap = fig_info.get("caption", "")
+                            fwidth = fig_info.get("width", "100%")
+                            fig_id_map[fid] = fig_counter
+                            if falias:
+                                fig_id_map[falias] = fig_counter
+                            anchor_id = falias or fid
+
+                            img_src = ""
+                            if workspace_dir and session_id:
+                                try:
+                                    reg = FigureRegistryManager.load_registry(workspace_dir)
+                                    if fid in reg.figures:
+                                        fig_hash = reg.figures[fid].source_hash or ""
+                                        v_param = f"?v={fig_hash}" if fig_hash else ""
+                                        img_src = f"/api/projects/{session_id}/assets/{reg.figures[fid].source}{v_param}"
+                                except Exception:
+                                    img_src = ""
+
+                            if img_src:
+                                visual_el = f'<img src="{img_src}" alt="{fcap or fid}" style="max-width: {fwidth}; height: auto;" />'
+                            else:
+                                visual_el = (
+                                    f'<div class="figure-placeholder" style="max-width: {fwidth}; margin: 0 auto;">'
+                                    f'<div class="ph-icon">🖼️</div>'
+                                    f'<div class="ph-id">{fid}</div>'
+                                    f'</div>'
+                                )
+
+                            fig_html = (
+                                f'<div class="preview-figure align-center" id="fig-{anchor_id}">'
+                                f"{visual_el}"
+                                f'<div class="preview-caption figure-caption">'
+                                f"<strong>Figure {fig_counter}</strong>{': ' + fcap if fcap else ''}"
+                                f"</div>"
+                                f"</div>"
+                            )
+                            tds.append(
+                                f'<td style="vertical-align: top; text-align: center; width: {col_width}; padding: 12px;">{fig_html}</td>'
+                            )
+                        else:
+                            tds.append(f'<td style="vertical-align: top; width: {col_width};">{cell}</td>')
+                    else:
+                        tds.append(f'<td style="vertical-align: top; width: {col_width};">{cell}</td>')
+
+                table_content = f'<table class="preview-table"><tbody><tr>{"".join(tds)}</tr></tbody></table>'
+                return (
+                    f'\n<div class="{" ".join(classes)}" id="tbl-{tbl_id}">\n'
+                    f"{cap_html}\n"
+                    f"{table_content}\n"
+                    f"</div>\n"
+                )
+
             converted_tbl = convert_tsv_tables(tbl_md) if "\t" in tbl_md else tbl_md
             return (
                 f'\n<div class="{" ".join(classes)}" id="tbl-{tbl_id}">\n'
-                f'{cap_html}\n\n'
-                f'{converted_tbl}\n\n'
-                f'</div>\n'
+                f"{cap_html}\n\n"
+                f"{converted_tbl}\n\n"
+                f"</div>\n"
             )
 
-        content = re.sub(
-            r"^@table(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
-            table_preview_repl,
-            content,
-            flags=re.MULTILINE | re.DOTALL,
-        )
+        content = replace_directive_blocks(content, "table", table_preview_repl)
 
         # 3b. Resolve figures for preview
-        fig_counter = 0
-
         def figure_preview_repl(m: re.Match) -> str:
             nonlocal fig_counter
             fig_counter += 1

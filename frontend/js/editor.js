@@ -27,6 +27,7 @@ export function initEditor({ onDocChange } = {}) {
   // Connect directive buttons
   const btnSection = document.getElementById('insert-section');
   const btnFigure = document.getElementById('insert-figure');
+  const btnSideBySide = document.getElementById('insert-side-by-side');
   const btnTable = document.getElementById('insert-table');
   const btnEquation = document.getElementById('insert-equation');
   const btnReferences = document.getElementById('insert-references');
@@ -42,6 +43,14 @@ export function initEditor({ onDocChange } = {}) {
     btnFigure.addEventListener('click', () => {
       insertSnippet(
         '\n@figure FIG-001\n  caption: Figure description\n  width: 16cm\n  height: auto\n  alignment: center\n  placement: figure\n@end {#fig:sample_fig}\n'
+      );
+    });
+  }
+
+  if (btnSideBySide) {
+    btnSideBySide.addEventListener('click', () => {
+      insertSnippet(
+        '\n@section\n  type: continuous\n  columns: 2\n@end\n\n@figure FIG-001\n  caption: Left Figure Description\n  width: 100%\n  alignment: center\n@end {#fig:fig_left}\n\n@figure FIG-002\n  caption: Right Figure Description\n  width: 100%\n  alignment: center\n@end {#fig:fig_right}\n\n@section\n  type: continuous\n  columns: 1\n@end\n'
       );
     });
   }

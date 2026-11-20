@@ -1014,6 +1014,10 @@ export function initProjectManager() {
           insertSnippet(
             '\n@figure FIG-001\n  caption: Figure description\n  width: 16cm\n  height: auto\n  alignment: center\n  placement: figure\n@end {#fig:sample_fig}\n'
           );
+        } else if (type === 'figures-side-by-side') {
+          insertSnippet(
+            '\n@section\n  type: continuous\n  columns: 2\n@end\n\n@figure FIG-001\n  caption: Left Figure Description\n  width: 100%\n  alignment: center\n@end {#fig:fig_left}\n\n@figure FIG-002\n  caption: Right Figure Description\n  width: 100%\n  alignment: center\n@end {#fig:fig_right}\n\n@section\n  type: continuous\n  columns: 1\n@end\n'
+          );
         } else if (type === 'table') {
           insertSnippet(
             '\n@table\n  caption: Table description and summary\n  alignment: center\n  min_row_height: 12mm\n  border: subtle\n  theme: light\n  highlight_first_row: true\n  row_banding: true\n| Parameter | Description | Nominal | Status |\n| :--- | :--- | :--- | :--- |\n| Item 1 | Primary signal path | 12.0 V | Pass |\n| Item 2 | Secondary telemetry | 3.3 V | Pass |\n@end {#tbl:sample_table}\n'

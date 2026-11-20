@@ -493,6 +493,12 @@ class DocxPostprocessor:
                                     etree.SubElement(rPr, f"{w}b")
                         cls._sort_pPr(pPr)
 
+        # Cleanup any orphaned ENGDOC_TABLE_CONFIG paragraphs so internal tokens never leak
+        for p in list(body.xpath(".//w:p[.//w:t[contains(text(), 'ENGDOC_TABLE_CONFIG:')]]", namespaces=NSMAP)):
+            parent = p.getparent()
+            if parent is not None:
+                parent.remove(p)
+
     @classmethod
     def _format_table_captions(
         cls,
@@ -539,6 +545,11 @@ class DocxPostprocessor:
                     clean_k = re.sub(r"[^A-Za-z0-9_]", "_", k)
                     target_map[("TBL", k)] = (f"_Ref_Tbl_{clean_k}", f"Table {number}", str(number))
                     target_map[("TBL_NUM", k)] = (f"_Ref_TblNum_{clean_k}", str(number), str(number))
+
+        # Cleanup any unconsumed ENGDOC_TBL_ANCHOR tokens from regular paragraphs
+        for p in list(body.xpath(".//w:p[.//w:t[contains(text(), 'ENGDOC_TBL_ANCHOR:')]]", namespaces=NSMAP)):
+            for t in p.xpath(".//w:t[contains(text(), 'ENGDOC_TBL_ANCHOR:')]", namespaces=NSMAP):
+                t.text = re.sub(r"ENGDOC_TBL_ANCHOR:[A-Za-z0-9_\-]+", "", t.text or "")
 
     @classmethod
     def _format_equations(
@@ -919,7 +930,7 @@ class DocxPostprocessor:
             return bid
 
         # 1. Process figure drawings and captions for centering and bold labels
-        all_paragraphs = list(body.findall(f"{{{W_NS}}}p"))
+        all_paragraphs = list(body.xpath(".//w:p", namespaces=NSMAP))
         figure_number = 0
         for i, p in enumerate(all_paragraphs):
             drawings = p.xpath(".//w:drawing", namespaces=NSMAP)
@@ -1047,7 +1058,7 @@ class DocxPostprocessor:
                             )
 
         # Check any remaining unformatted figure captions that contain ENGDOC_FIG_ANCHOR
-        for p in list(body.findall(f"{{{W_NS}}}p")):
+        for p in list(body.xpath(".//w:p[.//w:t[contains(text(), 'ENGDOC_FIG_ANCHOR:')]]", namespaces=NSMAP)):
             p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
             if "ENGDOC_FIG_ANCHOR:" in p_text:
                 fig_anchors = re.findall(r"ENGDOC_FIG_ANCHOR:([A-Za-z0-9_\-]+)", p_text)

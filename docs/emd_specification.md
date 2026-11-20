@@ -116,6 +116,55 @@ Referencing the figure in the narrative can use either the primary ID or the tra
 - `caption`: Descriptive caption text. During DOCX compilation, captions are formatted as native Word `Caption` styles with automated dynamic `SEQ Figure \* ARABIC` fields.
 - `placement`: `inline` (in text flow) | `figure` (floating block).
 
+### 4.1 Side-by-Side Figures
+For engineering documents requiring two or more figures placed side by side with independent sub-captions and cross-references, EMD supports two approaches:
+
+#### Approach A: Multi-Column Continuous Section (Recommended)
+```markdown
+@section
+  type: continuous
+  columns: 2
+@end
+
+@figure FIG-001
+  caption: Receiver Front-End Architecture
+  width: 100%
+  alignment: center
+@end {#fig:rx_frontend}
+
+@figure FIG-002
+  caption: Transmitter Power Amplifier Chain
+  width: 100%
+  alignment: center
+@end {#fig:tx_pa}
+
+@section
+  type: continuous
+  columns: 1
+@end
+```
+
+#### Approach B: Embedded Figures in `@table` Cells
+Directives inside table cells are depth-aware and do not collide with the outer table's `@end`:
+```markdown
+@table
+  caption: Comparative Hardware Architectures
+  alignment: center
+  border: subtle
+|  
+@figure FIG-001
+  caption: Variant A
+  width: 6cm
+@end {#fig:fig-001}
+|  
+@figure FIG-002
+  caption: Variant B
+  width: 6cm
+@end {#fig:fig-002}
+|
+@end {#tbl:comparative_table}
+```
+
 ---
 
 ## 5. Mathematical Equations (IEEE Standard)

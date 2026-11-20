@@ -167,6 +167,90 @@ def parse_reference_entries(body_text: str) -> list[dict[str, str]]:
     return entries
 
 
+def parse_embedded_figure(text: str) -> dict[str, Any] | None:
+    """Parses an @figure block embedded inside a table cell, multi-figure block, or section."""
+    m = re.search(
+        r"@figure(?:[ \t]+(?P<id>[A-Za-z0-9_\-\.]+))?[ \t]*\n(?P<body>.*?)(?:\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?|$)",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    fig_id = m.group("id") or ""
+    trailer = m.group("trailer") or ""
+    alias = ""
+    if trailer:
+        m_alias = re.search(r"\{#(?:fig:)?([A-Za-z0-9_\-]+)\}", trailer)
+        if m_alias:
+            alias = m_alias.group(1)
+
+    params: dict[str, Any] = {"id": fig_id, "alias": alias}
+    body_text = m.group("body")
+    for line in body_text.splitlines():
+        line = line.strip()
+        if ":" in line:
+            k, v = line.split(":", 1)
+            params[k.strip().lower()] = v.strip().strip("\"'")
+        elif line.startswith("{#") and not alias:
+            m_alias = re.search(r"\{#(?:fig:)?([A-Za-z0-9_\-]+)\}", line)
+            if m_alias:
+                params["alias"] = m_alias.group(1)
+
+    return params
+
+
+def replace_directive_blocks(
+    text: str,
+    directive_name: str,
+    replacer: Any,
+) -> str:
+    """Replaces @<directive_name> ... @end blocks with depth-awareness for nested directives."""
+    lines = text.splitlines(keepends=True)
+    out_lines = []
+    i = 0
+    n = len(lines)
+    start_pat = re.compile(rf"^@{directive_name}(?:[ \t]+([^\n]+))?[ \t]*\r?$", re.IGNORECASE)
+    inner_start_pat = re.compile(
+        r"^@(figure|figures|table|equation|section|references|bibliography|layout)\b", re.IGNORECASE
+    )
+    end_pat = re.compile(r"^(?:@end|end)(?:[ \t]+([^\n]+))?[ \t]*\r?$", re.IGNORECASE)
+
+    while i < n:
+        line = lines[i]
+        m_start = start_pat.match(line.rstrip("\r\n"))
+        if m_start:
+            header = m_start.group(1) or ""
+            depth = 1
+            body_lines = []
+            trailer = ""
+            i += 1
+            while i < n:
+                cur_line = lines[i]
+                cur_s = cur_line.rstrip("\r\n")
+                if inner_start_pat.match(cur_s):
+                    depth += 1
+                    body_lines.append(cur_line)
+                elif end_pat.match(cur_s):
+                    depth -= 1
+                    if depth == 0:
+                        m_end = end_pat.match(cur_s)
+                        trailer = m_end.group(1) or ""
+                        i += 1
+                        break
+                    else:
+                        body_lines.append(cur_line)
+                else:
+                    body_lines.append(cur_line)
+                i += 1
+            body_text = "".join(body_lines)
+            res = replacer(header, body_text, trailer)
+            out_lines.append(res)
+        else:
+            out_lines.append(line)
+            i += 1
+    return "".join(out_lines)
+
+
 class EMDParser:
     """Parser for EMD documents with YAML frontmatter and custom directives."""
 
@@ -364,32 +448,83 @@ class EMDParser:
 
         # 5b. Transform @table blocks
         table_counter = 0
+        fig_counter = 0
 
-        def table_repl(m: re.Match) -> str:
-            nonlocal table_counter
+        def table_repl(h: str, b: str, tr: str) -> str:
+            nonlocal table_counter, fig_counter
             table_counter += 1
-            h = m.group("header")
-            b = m.group("body")
-            tr = m.group("trailer")
             tbl_id, params, tbl_md = parse_table_params(h, b, tr)
             tbl_id = tbl_id or f"tbl-{table_counter:03d}"
             params["tbl_id"] = tbl_id
             caption = params.get("caption", "")
 
-            converted_tbl = convert_tsv_tables(tbl_md) if "\t" in tbl_md else tbl_md
+            # Process embedded @figure blocks or multiline cells inside table
+            if "@figure" in tbl_md:
+                cell_chunks = [
+                    c.strip()
+                    for c in re.split(
+                        r"(?:^\s*\|\s*$|\n\s*\|\s*\n|^\s*\|\s*|\s*\|\s*$)",
+                        tbl_md,
+                        flags=re.MULTILINE,
+                    )
+                    if c.strip()
+                ]
+                processed_cells = []
+                for cell in cell_chunks:
+                    if "@figure" in cell:
+                        fig_info = parse_embedded_figure(cell)
+                        if fig_info:
+                            fig_counter += 1
+                            fid = fig_info.get("id") or f"FIG-{fig_counter:03d}"
+                            falias = fig_info.get("alias", "")
+                            fcap = fig_info.get("caption", "")
+                            fwidth = fig_info.get("width", "6cm")
+                            fparams = {
+                                "seq_number": fig_counter,
+                                "caption": fcap,
+                                "width": fwidth,
+                                "height": fig_info.get("height", "auto"),
+                                "alignment": fig_info.get("alignment", "center"),
+                                "placement": fig_info.get("placement", "figure"),
+                                "alias": falias,
+                            }
+                            anchor_tag = f" ENGDOC_FIG_ANCHOR:{falias or fid}"
+                            if figure_resolver:
+                                fig_rendered = figure_resolver(fid, fparams)
+                                cell_str = f"{fig_rendered.strip()} {anchor_tag}".replace("\n", " ")
+                            else:
+                                cell_str = (
+                                    f'::: {{.figure id="{fid}" width="{fwidth}"}} '
+                                    f"**Figure {fig_counter}**: {fcap}{anchor_tag} :::"
+                                )
+                            processed_cells.append(cell_str)
+                        else:
+                            processed_cells.append(cell.replace("\n", " "))
+                    else:
+                        processed_cells.append(cell.replace("\n", " "))
+                if processed_cells:
+                    tbl_row = "| " + " | ".join(processed_cells) + " |"
+                    tbl_sep = "| " + " | ".join([":---:"] * len(processed_cells)) + " |"
+                    converted_tbl = f"{tbl_row}\n{tbl_sep}"
+                else:
+                    converted_tbl = tbl_md
+            else:
+                converted_tbl = convert_tsv_tables(tbl_md) if "\t" in tbl_md else tbl_md
+                # Ensure missing table header separator is synthesized so Pandoc always builds a table
+                lines = [line for line in converted_tbl.splitlines() if line.strip()]
+                if len(lines) >= 1 and lines[0].strip().startswith("|") and not any("---" in line_item for line_item in lines):
+                    cols = max(1, lines[0].count("|") - 1)
+                    sep = "| " + " | ".join([":---"] * cols) + " |"
+                    lines.insert(1, sep)
+                    converted_tbl = "\n".join(lines)
+
             cfg_payload = base64.b64encode(json.dumps(params).encode("utf-8")).decode("ascii")
             cap_line = f"Table: {caption} ENGDOC_TBL_ANCHOR:{tbl_id}\n\n" if caption else f"Table: ENGDOC_TBL_ANCHOR:{tbl_id}\n\n"
             return f"\n\n{cap_line}ENGDOC_TABLE_CONFIG:{cfg_payload}\n\n{converted_tbl}\n\n"
 
-        content = re.sub(
-            r"^@table(?:[ \t]+(?P<header>[^\n]+))?[ \t]*\n(?P<body>.*?)\n(?:@end|end)(?:[ \t]+(?P<trailer>[^\n]+))?[ \t]*$",
-            table_repl,
-            content,
-            flags=re.MULTILINE | re.DOTALL,
-        )
+        content = replace_directive_blocks(content, "table", table_repl)
 
         # 5c. Transform @figure blocks into markdown figures or Pandoc Divs
-        fig_counter = 0
 
         def figure_repl(m: re.Match) -> str:
             nonlocal fig_counter
