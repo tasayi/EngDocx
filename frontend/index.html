@@ -60,17 +60,77 @@
         <div class="dropdown">
           <button class="menu-btn" id="btn-menu-insert" title="Insert Snippet or Directive">Insert ▾</button>
           <div class="dropdown-menu" id="dropdown-insert">
-            <button class="dropdown-item" id="menu-insert-section-dialog">📑 Section Studio (Word Options)...</button>
-            <button class="dropdown-item" data-insert="section-continuous-2col">📑 Continuous Section (2 Col, Same Page)</button>
-            <button class="dropdown-item" data-insert="section-continuous-1col">📑 Continuous Section (1 Col, Same Page)</button>
-            <button class="dropdown-item" data-insert="section-portrait">📑 Section Break (Next Page, Portrait)</button>
-            <button class="dropdown-item" data-insert="section-landscape">📑 Section Break (Next Page, Landscape)</button>
+            <div class="dropdown-header">Document Blocks</div>
+            <button class="dropdown-item" data-insert="figure">
+              <span>🖼️ Figure Directive</span>
+              <span class="dropdown-badge">@figure</span>
+            </button>
+            <button class="dropdown-item" data-insert="table">
+              <span>📊 Table Directive</span>
+              <span class="dropdown-badge">@table</span>
+            </button>
+            <button class="dropdown-item" data-insert="equation">
+              <span>🧮 Math Equation (Display)</span>
+              <span class="dropdown-badge">$$ {#eq}</span>
+            </button>
+            <button class="dropdown-item" data-insert="equation-block">
+              <span>📐 Math Equation (Block)</span>
+              <span class="dropdown-badge">@equation</span>
+            </button>
+            <button class="dropdown-item" data-insert="references">
+              <span>📚 Bibliography / References</span>
+              <span class="dropdown-badge">@references</span>
+            </button>
+
             <div class="dropdown-divider"></div>
-            <button class="dropdown-item" data-insert="figure">🖼️ Figure Directive (@figure)</button>
-            <button class="dropdown-item" data-insert="pagebreak">📄 Page Break (@pagebreak)</button>
+            <div class="dropdown-header">Sections & Layout</div>
+            <button class="dropdown-item" id="menu-insert-section-dialog">
+              <span>📑 Section Studio (Word Options)...</span>
+              <span class="dropdown-badge">Studio</span>
+            </button>
+            <button class="dropdown-item" data-insert="section-heading">
+              <span>🔖 Section Heading with Anchor</span>
+              <span class="dropdown-badge"># {#sec}</span>
+            </button>
+            <button class="dropdown-item" data-insert="section-continuous-1col">
+              <span>📑 Continuous Section (1 Col)</span>
+              <span class="dropdown-badge">1 Col</span>
+            </button>
+            <button class="dropdown-item" data-insert="section-continuous-2col">
+              <span>📑 Continuous Section (2 Col)</span>
+              <span class="dropdown-badge">2 Col</span>
+            </button>
+            <button class="dropdown-item" data-insert="section-landscape">
+              <span>📑 Section Break (Landscape)</span>
+              <span class="dropdown-badge">A4 Land</span>
+            </button>
+            <button class="dropdown-item" data-insert="pagebreak">
+              <span>📄 Page Break</span>
+              <span class="dropdown-badge">@pagebreak</span>
+            </button>
+
             <div class="dropdown-divider"></div>
-            <button class="dropdown-item" data-insert="table">📊 Table Template</button>
-            <button class="dropdown-item" data-insert="equation">🧮 Math Equation ($$)</button>
+            <div class="dropdown-header">Cross-References & Citations</div>
+            <button class="dropdown-item" data-insert="xref-figure">
+              <span>🔗 Figure Reference</span>
+              <span class="dropdown-badge">@fig:...</span>
+            </button>
+            <button class="dropdown-item" data-insert="xref-table">
+              <span>🔗 Table Reference</span>
+              <span class="dropdown-badge">@tbl:...</span>
+            </button>
+            <button class="dropdown-item" data-insert="xref-equation">
+              <span>🔗 Equation Reference</span>
+              <span class="dropdown-badge">@eq:...</span>
+            </button>
+            <button class="dropdown-item" data-insert="xref-section">
+              <span>🔗 Section Reference</span>
+              <span class="dropdown-badge">@sec:...</span>
+            </button>
+            <button class="dropdown-item" data-insert="xref-citation">
+              <span>🏷️ Citation / Bibliography Ref</span>
+              <span class="dropdown-badge">[@ref]</span>
+            </button>
           </div>
         </div>
 
@@ -135,8 +195,11 @@
           </div>
           <div class="editor-tools">
             <button class="tool-btn" id="insert-section" title="Configure and Insert Section Directive (Word Layouts)">📑 Section Studio</button>
-            <button class="tool-btn" id="insert-figure" title="Insert Figure Directive">@figure</button>
-            <button class="tool-btn" id="insert-pagebreak" title="Insert Page Break">@pagebreak</button>
+            <button class="tool-btn" id="insert-figure" title="Insert Figure Directive with Cross-Ref Anchor">🖼️ @figure</button>
+            <button class="tool-btn" id="insert-table" title="Insert Table Directive with Cross-Ref Anchor">📊 @table</button>
+            <button class="tool-btn" id="insert-equation" title="Insert Display Equation with Cross-Ref Anchor">🧮 $$ Equation</button>
+            <button class="tool-btn" id="insert-references" title="Insert Bibliography / References Directive">📚 @references</button>
+            <button class="tool-btn" id="insert-pagebreak" title="Insert Page Break">📄 @pagebreak</button>
           </div>
         </div>
         <div class="panel-content editor-wrapper">

@@ -199,7 +199,8 @@ class ProjectState {
         treeFigs,
         this.sessionId,
         (fig) => {
-          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '150mm'}"\n@end\n`);
+          const anchor = `{#fig:${(fig.id || 'figure').toLowerCase().replace(/[^a-z0-9_-]/g, '_')}}`;
+          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '16cm'}"\n  alignment: ${fig.alignment || 'center'}\n@end ${anchor}\n`);
         },
         async (figId) => {
           try {
@@ -1009,22 +1010,48 @@ export function initProjectManager() {
       btn.addEventListener('click', () => {
         const type = btn.dataset.insert;
         dropdownInsert.classList.remove('show');
-        if (type === 'section-continuous-2col') {
-          insertSnippet('\n@section\n  type: continuous\n  columns: 2\n@end\n');
+        if (type === 'figure') {
+          insertSnippet(
+            '\n@figure FIG-001\n  caption: Figure description\n  width: 16cm\n  height: auto\n  alignment: center\n  placement: figure\n@end {#fig:sample_fig}\n'
+          );
+        } else if (type === 'table') {
+          insertSnippet(
+            '\n@table\n  caption: Table description and summary\n  alignment: center\n  min_row_height: 12mm\n  border: subtle\n  theme: light\n  highlight_first_row: true\n  row_banding: true\n| Parameter | Description | Nominal | Status |\n| :--- | :--- | :--- | :--- |\n| Item 1 | Primary signal path | 12.0 V | Pass |\n| Item 2 | Secondary telemetry | 3.3 V | Pass |\n@end {#tbl:sample_table}\n'
+          );
+        } else if (type === 'equation') {
+          insertSnippet(
+            '\n$$\nSNR = \\frac{P_{\\text{signal}}}{k_B \\cdot T \\cdot B \\cdot F}\n$$ {#eq:snr}\n'
+          );
+        } else if (type === 'equation-block') {
+          insertSnippet(
+            '\n@equation EQ-001\n  caption: Friis transmission formula for free-space path loss\n  math: P_r = P_t + G_t + G_r + 20 \\log_{10}\\left(\\frac{\\lambda}{4\\pi R}\\right)\n@end {#eq:friis}\n'
+          );
+        } else if (type === 'references' || type === 'bibliography') {
+          insertSnippet(
+            '\n@references\n  ref1: C. E. Shannon, "A Mathematical Theory of Communication," Bell Syst. Tech. J., vol. 27, pp. 379–423, 1948.\n  ref2: H. T. Friis, "A note on a simple transmission formula," Proc. IRE, vol. 34, no. 5, pp. 254–256, 1946.\n@end\n'
+          );
+        } else if (type === 'section-heading') {
+          insertSnippet('\n# Section Title {#sec:sample_section}\n');
         } else if (type === 'section-continuous-1col') {
           insertSnippet('\n@section\n  type: continuous\n  columns: 1\n@end\n');
+        } else if (type === 'section-continuous-2col') {
+          insertSnippet('\n@section\n  type: continuous\n  columns: 2\n@end\n');
         } else if (type === 'section-portrait') {
           insertSnippet('\n@section\n  type: next_page\n  orientation: portrait\n  page: A4\n  columns: 1\n@end\n');
         } else if (type === 'section-landscape') {
-          insertSnippet('\n@section\n  type: next_page\n  orientation: landscape\n  page: A4\n  columns: 2\n@end\n');
-        } else if (type === 'figure') {
-          insertSnippet('\n@figure FIG-001\n  caption: "Figure caption"\n  width: "150mm"\n@end\n');
+          insertSnippet('\n@section\n  type: next_page\n  orientation: landscape\n  page: A4\n  columns: 1\n@end\n');
         } else if (type === 'pagebreak') {
           insertSnippet('\n@pagebreak\n');
-        } else if (type === 'table') {
-          insertSnippet('\nTable: Table caption\n\n| Item | Description | Nominal | Tolerance |\n|---|---|---|---|\n| 1 | Signal Channel | 12.0 V | ±0.5 V |\n');
-        } else if (type === 'equation') {
-          insertSnippet('\n$$\nq_{\\text{rad}} = \\epsilon \\sigma \\left( T_1^4 - T_2^4 \\right)\n$$\n');
+        } else if (type === 'xref-figure') {
+          insertSnippet('Figure @fig:sample_fig');
+        } else if (type === 'xref-table') {
+          insertSnippet('Table @tbl:sample_table');
+        } else if (type === 'xref-equation') {
+          insertSnippet('Equation @eq:snr');
+        } else if (type === 'xref-section') {
+          insertSnippet('Section @sec:sample_section');
+        } else if (type === 'xref-citation') {
+          insertSnippet('[@ref1]');
         }
       });
     });
@@ -1051,7 +1078,8 @@ export function initProjectManager() {
         container,
         projectState.sessionId,
         (fig) => {
-          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '150mm'}"\n@end\n`);
+          const anchor = `{#fig:${(fig.id || 'figure').toLowerCase().replace(/[^a-z0-9_-]/g, '_')}}`;
+          insertSnippet(`\n@figure ${fig.id}\n  caption: "${fig.caption || fig.id}"\n  width: "${fig.width || '16cm'}"\n  alignment: ${fig.alignment || 'center'}\n@end ${anchor}\n`);
           modalFigures.style.display = 'none';
         },
         async () => {

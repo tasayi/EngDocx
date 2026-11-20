@@ -27,6 +27,9 @@ export function initEditor({ onDocChange } = {}) {
   // Connect directive buttons
   const btnSection = document.getElementById('insert-section');
   const btnFigure = document.getElementById('insert-figure');
+  const btnTable = document.getElementById('insert-table');
+  const btnEquation = document.getElementById('insert-equation');
+  const btnReferences = document.getElementById('insert-references');
   const btnPagebreak = document.getElementById('insert-pagebreak');
 
   if (btnSection) {
@@ -37,7 +40,33 @@ export function initEditor({ onDocChange } = {}) {
 
   if (btnFigure) {
     btnFigure.addEventListener('click', () => {
-      insertSnippet('\n@figure FIG-001\n  width: 16cm\n  height: auto\n  alignment: center\n  caption: Figure description\n@end\n');
+      insertSnippet(
+        '\n@figure FIG-001\n  caption: Figure description\n  width: 16cm\n  height: auto\n  alignment: center\n  placement: figure\n@end {#fig:sample_fig}\n'
+      );
+    });
+  }
+
+  if (btnTable) {
+    btnTable.addEventListener('click', () => {
+      insertSnippet(
+        '\n@table\n  caption: Table description and summary\n  alignment: center\n  min_row_height: 12mm\n  border: subtle\n  theme: light\n  highlight_first_row: true\n  row_banding: true\n| Parameter | Description | Nominal | Status |\n| :--- | :--- | :--- | :--- |\n| Item 1 | Primary signal path | 12.0 V | Pass |\n| Item 2 | Secondary telemetry | 3.3 V | Pass |\n@end {#tbl:sample_table}\n'
+      );
+    });
+  }
+
+  if (btnEquation) {
+    btnEquation.addEventListener('click', () => {
+      insertSnippet(
+        '\n$$\nSNR = \\frac{P_{\\text{signal}}}{k_B \\cdot T \\cdot B \\cdot F}\n$$ {#eq:snr}\n'
+      );
+    });
+  }
+
+  if (btnReferences) {
+    btnReferences.addEventListener('click', () => {
+      insertSnippet(
+        '\n@references\n  ref1: C. E. Shannon, "A Mathematical Theory of Communication," Bell Syst. Tech. J., vol. 27, pp. 379–423, 1948.\n  ref2: H. T. Friis, "A note on a simple transmission formula," Proc. IRE, vol. 34, no. 5, pp. 254–256, 1946.\n@end\n'
+      );
     });
   }
 

@@ -216,7 +216,17 @@
   font-size: 11px;
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
-  padding: 2px 6px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.tool-btn:hover {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  border-color: var(--accent, #6366f1);
 }
 
 /* Properties Panel */

@@ -116,7 +116,8 @@ export function initPropertiesPanel() {
   btnInsertFigProp?.addEventListener('click', () => {
     const widthVal = figWidthInput ? figWidthInput.value.trim() : '16cm';
     const heightVal = figHeightInput ? figHeightInput.value.trim() : 'auto';
-    const snippet = `\n@figure ${activeFigureId}\n  width: ${widthVal || '16cm'}\n  height: ${heightVal || 'auto'}\n  alignment: ${currentFigAlignment}\n  caption: Figure description\n@end\n`;
+    const anchor = `{#fig:${activeFigureId.toLowerCase().replace(/[^a-z0-9_-]/g, '_')}}`;
+    const snippet = `\n@figure ${activeFigureId}\n  caption: Figure description\n  width: ${widthVal || '16cm'}\n  height: ${heightVal || 'auto'}\n  alignment: ${currentFigAlignment}\n  placement: figure\n@end ${anchor}\n`;
     insertSnippet(snippet);
   });
 }
