@@ -147,6 +147,11 @@ async function executePreviewFetch(sessionId, content) {
     if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
       window.MathJax.typesetPromise();
     }
+
+    // Trigger Mermaid if loaded
+    if (window.mermaid && typeof window.mermaid.run === "function") {
+      window.mermaid.run();
+    }
   } catch (err) {
     console.warn("Live preview update failed:", err);
   }

@@ -15,7 +15,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 APP_NAME = "engdoc"
 
@@ -178,7 +177,7 @@ def _build_command(
 
 
 def build(*, dry_run: bool = False) -> Path | None:
-    if sys.version_info < (3, 12):
+    if sys.version_info < (3, 12):  # noqa: UP036
         raise RuntimeError("EngDoc distribution builds require Python 3.12 or newer.")
 
     try:

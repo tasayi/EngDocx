@@ -283,3 +283,76 @@ Cross-references use canonical prefixes and automatically resolve into native Wo
 - Multi-citation: `[@ref1, @ref2, @ref3]` $\rightarrow$ `[1, 2, 3]`
 - Fallback: Unresolved targets render gracefully as `[?]` or `?`.
 
+---
+
+## 9. Extended Markdown, Diagrams & Enterprise Callouts
+
+EngDoc natively supports standard and extended Markdown fidelity in both Word DOCX outputs and Live HTML preview.
+
+### 9.1 Native Mermaid Diagrams
+Mermaid diagram blocks are parsed and rendered directly into vector SVG figures, cached by SHA-256 in `assets/figures/.cache/diagrams/`, and integrated into the document figure sequence:
+
+````markdown
+```mermaid {caption="Architecture Overview" #fig:sys-arch width="14cm"}
+flowchart TD
+    A[Raw Input] --> B{Process?}
+    B -->|Yes| C[(Storage Engine)]
+    B -->|No| D([Halt Execution])
+```
+````
+
+Supported diagram types:
+- **Flowcharts & Graphs (`flowchart TD`, `flowchart LR`, `graph TD`, `graph LR`)**: Renders nodes (`rect`, `rounded`, `stadium`, `cylinder`, `circle`, `diamond`), directed/undirected links, edge labels, and arrowhead markers.
+- **Sequence Diagrams (`sequenceDiagram`)**: Renders participant and actor lifelines, request/reply arrows, and labels.
+- **Cross-Referencing**: Diagrams with `#fig:id` can be referenced anywhere via `@fig:id`.
+
+### 9.2 Enterprise Monospace Code Blocks
+Fenced code blocks are styled in Word DOCX with:
+- Monospace font: `Consolas` (9.5pt)
+- Background shading: Light slate `#F1F5F9`
+- Accent border: 3pt left border `#6366F1` (Indigo) with subtle `#E2E8F0` framing
+- Interline spacing: Zero paragraph gap (`before="0"`, `after="0"`)
+
+````markdown
+```python
+def process_data(samples: list[float]) -> float:
+    # Calculate sample mean
+    return sum(samples) / len(samples) if samples else 0.0
+```
+````
+
+### 9.3 Callouts / Admonitions
+GitHub and Obsidian-style callouts are transformed into native Word single-cell callout boxes with 3.5pt left accent bars, tinted backgrounds, and bold titles:
+
+```markdown
+> [!NOTE] Optional Title
+> Explanatory note or contextual detail.
+
+> [!TIP]
+> Best practice advice or optimization recommendation.
+
+> [!IMPORTANT]
+> Critical step or prerequisite.
+
+> [!WARNING]
+> Safety warning or caution regarding potential failure.
+
+> [!CAUTION]
+> Danger notice or destructive operation warning.
+```
+
+| Type | Left Accent | Shading | Title / Icon |
+| :--- | :--- | :--- | :--- |
+| `NOTE` | `#3B82F6` | `#EFF6FF` | ℹ️ Note |
+| `TIP` | `#10B981` | `#ECFDF5` | 💡 Tip |
+| `IMPORTANT` | `#8B5CF6` | `#F5F3FF` | 📌 Important |
+| `WARNING` | `#F59E0B` | `#FFFBEB` | ⚠️ Warning |
+| `CAUTION` | `#EF4444` | `#FEF2F2` | 🛑 Caution |
+
+### 9.4 Task Lists & Extended Typography
+- **Task Lists**: `- [ ]` renders as ballot box `☐` (`\u2610`), and `- [x]` renders as ballot box with check `☑` (`\u2611`).
+- **Footnotes**: `[^1]` compiles to native Word `<w:footnoteReference>`.
+- **Subscripts & Superscripts**: `H~2~O` $\rightarrow$ H<sub>2</sub>O, `E = mc^2^` $\rightarrow$ E = mc<sup>2</sup>.
+- **Strikethrough**: `~~obsolete text~~` $\rightarrow$ ~~obsolete text~~.
+
+

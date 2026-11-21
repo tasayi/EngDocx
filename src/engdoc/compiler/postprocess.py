@@ -278,6 +278,14 @@ class DocxPostprocessor:
                             break
 
     @classmethod
+    def _process_numbering_xml(cls, xml_bytes: bytes) -> bytes:
+        """Standardizes ballot box symbols in numbering definitions (replaces ☒ with ☑)."""
+        text = xml_bytes.decode("utf-8")
+        if "☒" in text:
+            text = text.replace("☒", "\u2611")
+        return text.encode("utf-8")
+
+    @classmethod
     def process(
         cls,
         docx_path: Path,
@@ -311,6 +319,8 @@ class DocxPostprocessor:
                         data = cls._process_document_xml(
                             data, current_layout, caption_style, has_table_grid
                         )
+                    elif item.filename == "word/numbering.xml":
+                        data = cls._process_numbering_xml(data)
                     elif item.filename.endswith(".rels"):
                         data = cls._drop_dangling_rels(item.filename, data, names)
                     z_out.writestr(item, data)
@@ -902,6 +912,329 @@ class DocxPostprocessor:
         return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     @classmethod
+    def _format_code_blocks(cls, body: etree.Element) -> None:
+        """Applies enterprise styling to fenced code blocks (Consolas, Slate-100 shading, borders)."""
+        w = f"{{{W_NS}}}"
+        for p in body.findall(f"{w}p"):
+            pPr = p.find(f"{w}pPr")
+            is_code = False
+            if pPr is not None:
+                pStyle = pPr.find(f"{w}pStyle")
+                if pStyle is not None:
+                    val = (pStyle.get(f"{w}val") or "").lower()
+                    if val in ("sourcecode", "source code", "verbatimchar", "code"):
+                        is_code = True
+
+            if not is_code:
+                r_fonts = p.xpath(".//w:rFonts/@w:ascii", namespaces=NSMAP)
+                if any(f in ("Consolas", "Courier New", "Lucida Console") for f in r_fonts):
+                    is_code = True
+
+            if is_code:
+                if pPr is None:
+                    pPr = etree.Element(f"{w}pPr")
+                    p.insert(0, pPr)
+
+                shd = pPr.find(f"{w}shd")
+                if shd is None:
+                    shd = etree.SubElement(pPr, f"{w}shd")
+                shd.set(f"{w}val", "clear")
+                shd.set(f"{w}color", "auto")
+                shd.set(f"{w}fill", "F1F5F9")
+
+                pBdr = pPr.find(f"{w}pBdr")
+                if pBdr is None:
+                    pBdr = etree.SubElement(pPr, f"{w}pBdr")
+                for c in list(pBdr):
+                    pBdr.remove(c)
+
+                left_bdr = etree.SubElement(pBdr, f"{w}left")
+                left_bdr.set(f"{w}val", "single")
+                left_bdr.set(f"{w}sz", "24")
+                left_bdr.set(f"{w}space", "8")
+                left_bdr.set(f"{w}color", "6366F1")
+
+                right_bdr = etree.SubElement(pBdr, f"{w}right")
+                right_bdr.set(f"{w}val", "single")
+                right_bdr.set(f"{w}sz", "4")
+                right_bdr.set(f"{w}space", "4")
+                right_bdr.set(f"{w}color", "E2E8F0")
+
+                top_bdr = etree.SubElement(pBdr, f"{w}top")
+                top_bdr.set(f"{w}val", "single")
+                top_bdr.set(f"{w}sz", "4")
+                top_bdr.set(f"{w}space", "1")
+                top_bdr.set(f"{w}color", "E2E8F0")
+
+                bottom_bdr = etree.SubElement(pBdr, f"{w}bottom")
+                bottom_bdr.set(f"{w}val", "single")
+                bottom_bdr.set(f"{w}sz", "4")
+                bottom_bdr.set(f"{w}space", "1")
+                bottom_bdr.set(f"{w}color", "E2E8F0")
+
+                ind = pPr.find(f"{w}ind")
+                if ind is None:
+                    ind = etree.SubElement(pPr, f"{w}ind")
+                ind.set(f"{w}left", "240")
+                ind.set(f"{w}right", "240")
+
+                spacing = pPr.find(f"{w}spacing")
+                if spacing is None:
+                    spacing = etree.SubElement(pPr, f"{w}spacing")
+                spacing.set(f"{w}before", "0")
+                spacing.set(f"{w}after", "0")
+                spacing.set(f"{w}line", "240")
+                spacing.set(f"{w}lineRule", "auto")
+
+                for r in p.findall(f"{w}r"):
+                    rPr = r.find(f"{w}rPr")
+                    if rPr is None:
+                        rPr = etree.Element(f"{w}rPr")
+                        r.insert(0, rPr)
+                    rFonts = rPr.find(f"{w}rFonts")
+                    if rFonts is None:
+                        rFonts = etree.SubElement(rPr, f"{w}rFonts")
+                    rFonts.set(f"{w}ascii", "Consolas")
+                    rFonts.set(f"{w}hAnsi", "Consolas")
+                    rFonts.set(f"{w}cs", "Consolas")
+                    sz = rPr.find(f"{w}sz")
+                    if sz is None:
+                        sz = etree.SubElement(rPr, f"{w}sz")
+                    sz.set(f"{w}val", "19")
+
+                cls._sort_pPr(pPr)
+
+    @classmethod
+    def _format_callouts(cls, body: etree.Element) -> None:
+        """Transforms ENGDOC_CALLOUT markers into native Word single-cell callout boxes."""
+        w = f"{{{W_NS}}}"
+        callout_styles = {
+            "NOTE": {
+                "icon": "ℹ️",
+                "default_title": "Note",
+                "accent": "3B82F6",
+                "border": "BFDBFE",
+                "fill": "EFF6FF",
+                "title_color": "1E40AF",
+            },
+            "TIP": {
+                "icon": "💡",
+                "default_title": "Tip",
+                "accent": "10B981",
+                "border": "A7F3D0",
+                "fill": "ECFDF5",
+                "title_color": "065F46",
+            },
+            "IMPORTANT": {
+                "icon": "📌",
+                "default_title": "Important",
+                "accent": "8B5CF6",
+                "border": "DDD6FE",
+                "fill": "F5F3FF",
+                "title_color": "5B21B6",
+            },
+            "WARNING": {
+                "icon": "⚠️",
+                "default_title": "Warning",
+                "accent": "F59E0B",
+                "border": "FDE68A",
+                "fill": "FFFBEB",
+                "title_color": "92400E",
+            },
+            "CAUTION": {
+                "icon": "🛑",
+                "default_title": "Caution",
+                "accent": "EF4444",
+                "border": "FECACA",
+                "fill": "FEF2F2",
+                "title_color": "991B1B",
+            },
+        }
+
+        while True:
+            paragraphs = list(body.findall(f"{w}p"))
+            start_idx = -1
+            end_idx = -1
+            start_p = None
+            payload: dict[str, Any] = {}
+
+            for idx, p in enumerate(paragraphs):
+                p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+                if "ENGDOC_CALLOUT_START:" in p_text:
+                    start_idx = idx
+                    start_p = p
+                    token_idx = p_text.find("ENGDOC_CALLOUT_START:")
+                    raw_payload = p_text[token_idx + len("ENGDOC_CALLOUT_START:") :].strip()
+                    if " " in raw_payload:
+                        raw_payload = raw_payload.split()[0]
+                    try:
+                        payload = decode_payload(raw_payload)
+                    except Exception:
+                        payload = {"type": "NOTE", "title": "Note"}
+                    break
+
+            if start_idx == -1 or start_p is None:
+                break
+
+            for idx in range(start_idx, len(paragraphs)):
+                p = paragraphs[idx]
+                p_text = "".join(t.text or "" for t in p.xpath(".//w:t", namespaces=NSMAP))
+                if "ENGDOC_CALLOUT_END" in p_text:
+                    end_idx = idx
+                    break
+
+            if end_idx == -1:
+                for t in start_p.xpath(".//w:t", namespaces=NSMAP):
+                    if t.text and "ENGDOC_CALLOUT_START:" in t.text:
+                        t.text = re.sub(r"ENGDOC_CALLOUT_START:[^\s]+", "", t.text).strip()
+                break
+
+            callout_type = str(payload.get("type", "NOTE")).upper()
+            callout_conf = callout_styles.get(callout_type, callout_styles["NOTE"])
+            title = str(payload.get("title", "")).strip() or callout_conf["default_title"]
+
+            inner_paragraphs: list[etree.Element] = []
+            for idx in range(start_idx + 1, end_idx):
+                inner_paragraphs.append(paragraphs[idx])
+
+            tbl = etree.Element(f"{w}tbl")
+            tblPr = etree.SubElement(tbl, f"{w}tblPr")
+            tblW = etree.SubElement(tblPr, f"{w}tblW")
+            tblW.set(f"{w}w", "5000")
+            tblW.set(f"{w}type", "pct")
+
+            jc = etree.SubElement(tblPr, f"{w}jc")
+            jc.set(f"{w}val", "center")
+
+            tblBorders = etree.SubElement(tblPr, f"{w}tblBorders")
+            top_b = etree.SubElement(tblBorders, f"{w}top")
+            top_b.set(f"{w}val", "single")
+            top_b.set(f"{w}sz", "4")
+            top_b.set(f"{w}space", "0")
+            top_b.set(f"{w}color", callout_conf["border"])
+
+            left_b = etree.SubElement(tblBorders, f"{w}left")
+            left_b.set(f"{w}val", "single")
+            left_b.set(f"{w}sz", "28")
+            left_b.set(f"{w}space", "0")
+            left_b.set(f"{w}color", callout_conf["accent"])
+
+            bottom_b = etree.SubElement(tblBorders, f"{w}bottom")
+            bottom_b.set(f"{w}val", "single")
+            bottom_b.set(f"{w}sz", "4")
+            bottom_b.set(f"{w}space", "0")
+            bottom_b.set(f"{w}color", callout_conf["border"])
+
+            right_b = etree.SubElement(tblBorders, f"{w}right")
+            right_b.set(f"{w}val", "single")
+            right_b.set(f"{w}sz", "4")
+            right_b.set(f"{w}space", "0")
+            right_b.set(f"{w}color", callout_conf["border"])
+
+            tblCellMar = etree.SubElement(tblPr, f"{w}tblCellMar")
+            for side in ("top", "bottom"):
+                m = etree.SubElement(tblCellMar, f"{w}{side}")
+                m.set(f"{w}w", "120")
+                m.set(f"{w}type", "dxa")
+            for side in ("left", "right"):
+                m = etree.SubElement(tblCellMar, f"{w}{side}")
+                m.set(f"{w}w", "180")
+                m.set(f"{w}type", "dxa")
+
+            tr = etree.SubElement(tbl, f"{w}tr")
+            trPr = etree.SubElement(tr, f"{w}trPr")
+            etree.SubElement(trPr, f"{w}cantSplit")
+
+            tc = etree.SubElement(tr, f"{w}tc")
+            tcPr = etree.SubElement(tc, f"{w}tcPr")
+            tcW = etree.SubElement(tcPr, f"{w}tcW")
+            tcW.set(f"{w}w", "5000")
+            tcW.set(f"{w}type", "pct")
+
+            shd = etree.SubElement(tcPr, f"{w}shd")
+            shd.set(f"{w}val", "clear")
+            shd.set(f"{w}color", "auto")
+            shd.set(f"{w}fill", callout_conf["fill"])
+
+            tcMar = etree.SubElement(tcPr, f"{w}tcMar")
+            for side in ("top", "bottom"):
+                m = etree.SubElement(tcMar, f"{w}{side}")
+                m.set(f"{w}w", "140")
+                m.set(f"{w}type", "dxa")
+            for side in ("left", "right"):
+                m = etree.SubElement(tcMar, f"{w}{side}")
+                m.set(f"{w}w", "200")
+                m.set(f"{w}type", "dxa")
+
+            header_p = etree.SubElement(tc, f"{w}p")
+            header_pPr = etree.SubElement(header_p, f"{w}pPr")
+            header_spacing = etree.SubElement(header_pPr, f"{w}spacing")
+            header_spacing.set(f"{w}before", "60")
+            header_spacing.set(f"{w}after", "60")
+            header_spacing.set(f"{w}line", "240")
+            header_spacing.set(f"{w}lineRule", "auto")
+            cls._sort_pPr(header_pPr)
+
+            r_title = etree.SubElement(header_p, f"{w}r")
+            r_title_pr = etree.SubElement(r_title, f"{w}rPr")
+            etree.SubElement(r_title_pr, f"{w}b")
+            r_color = etree.SubElement(r_title_pr, f"{w}color")
+            r_color.set(f"{w}val", callout_conf["title_color"])
+            r_sz = etree.SubElement(r_title_pr, f"{w}sz")
+            r_sz.set(f"{w}val", "21")
+            r_fonts = etree.SubElement(r_title_pr, f"{w}rFonts")
+            r_fonts.set(f"{w}ascii", "Segoe UI")
+            r_fonts.set(f"{w}hAnsi", "Segoe UI")
+
+            t_title = etree.SubElement(r_title, f"{w}t")
+            t_title.set(f"{{{XML_NS}}}space", "preserve")
+            t_title.text = f"{callout_conf['icon']} {title}"
+
+            if inner_paragraphs:
+                for ip in inner_paragraphs:
+                    ipPr = ip.find(f"{w}pPr")
+                    if ipPr is None:
+                        ipPr = etree.Element(f"{w}pPr")
+                        ip.insert(0, ipPr)
+                    spacing = ipPr.find(f"{w}spacing")
+                    if spacing is None:
+                        spacing = etree.SubElement(ipPr, f"{w}spacing")
+                    spacing.set(f"{w}before", "0")
+                    spacing.set(f"{w}after", "60")
+                    spacing.set(f"{w}line", "240")
+                    spacing.set(f"{w}lineRule", "auto")
+                    cls._sort_pPr(ipPr)
+                    tc.append(ip)
+            else:
+                fallback_p = etree.SubElement(tc, f"{w}p")
+                fallback_r = etree.SubElement(fallback_p, f"{w}r")
+                fallback_t = etree.SubElement(fallback_r, f"{w}t")
+                fallback_t.text = ""
+
+            start_p.addprevious(tbl)
+            body.remove(start_p)
+            end_p = paragraphs[end_idx]
+            if end_p.getparent() is not None:
+                body.remove(end_p)
+
+    @classmethod
+    def _format_task_lists(cls, body: etree.Element) -> None:
+        """Replaces ballot box placeholders with Unicode symbols ☐ and ☑."""
+        for t in body.xpath(".//w:t", namespaces=NSMAP):
+            if not t.text:
+                continue
+            text = t.text
+            if "[ ]" in text:
+                text = text.replace("[ ]", "\u2610")
+            if "[x]" in text:
+                text = text.replace("[x]", "\u2611")
+            if "[X]" in text:
+                text = text.replace("[X]", "\u2611")
+            if "\u2612" in text:
+                text = text.replace("\u2612", "\u2611")
+            t.text = text
+
+    @classmethod
     def _process_document_xml(
         cls,
         xml_bytes: bytes,
@@ -1212,6 +1545,15 @@ class DocxPostprocessor:
 
         # 4. Resolve cross-references
         cls._resolve_cross_references(body, target_map)
+
+        # 5. Format enterprise code blocks (Consolas, Slate-100 shading, left border)
+        cls._format_code_blocks(body)
+
+        # 6. Format callouts / admonitions (Note, Tip, Important, Warning, Caution)
+        cls._format_callouts(body)
+
+        # 7. Format task lists (Unicode ballot boxes)
+        cls._format_task_lists(body)
 
         # 2. Extract terminal sectPr to use as template for headers/footers
         terminal_sect_pr = body.find(f"{{{W_NS}}}sectPr")

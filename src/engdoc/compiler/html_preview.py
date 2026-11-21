@@ -130,6 +130,103 @@ class HTMLPreviewGenerator:
         sec_id_map: dict[str, str] = {}
         bib_id_map: dict[str, int] = {}
 
+        tbl_counter = 0
+        fig_counter = 0
+
+        # 3-callout. Resolve GitHub / Obsidian callouts for preview
+        def callout_preview_repl(m: re.Match) -> str:
+            callout_type = m.group(1).upper()
+            title = (m.group(2) or "").strip()
+            body_raw = m.group(3)
+            cleaned_body = []
+            for line in body_raw.splitlines():
+                if line.startswith(">"):
+                    line = line[1:]
+                    if line.startswith(" "):
+                        line = line[1:]
+                cleaned_body.append(line)
+            inner_md = "\n".join(cleaned_body).strip()
+
+            icons = {
+                "NOTE": "ℹ️",
+                "TIP": "💡",
+                "IMPORTANT": "📌",
+                "WARNING": "⚠️",
+                "CAUTION": "🛑",
+            }
+            icon = icons.get(callout_type, "ℹ️")
+            display_title = title or callout_type.capitalize()
+            type_class = f"callout-{callout_type.lower()}"
+
+            return (
+                f'\n<div class="preview-callout {type_class}">'
+                f'<div class="callout-header"><span class="callout-icon">{icon}</span> <strong>{display_title}</strong></div>'
+                f'<div class="callout-content">\n\n{inner_md}\n\n</div>'
+                f'</div>\n'
+            )
+
+        content = re.sub(
+            r"^>[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:([^\n]*))?\r?\n((?:>[^\n]*\r?\n?)*)",
+            callout_preview_repl,
+            content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
+        # 3-mermaid. Resolve Mermaid code blocks for preview
+        def mermaid_preview_repl(m: re.Match) -> str:
+            nonlocal fig_counter
+            fig_counter += 1
+            header = m.group("header") or ""
+            code = m.group("code").strip()
+            caption = ""
+            alias = ""
+            m_cap = re.search(r'caption=["\']([^"\']+)["\']', header)
+            if m_cap:
+                caption = m_cap.group(1)
+            m_al = re.search(r'#(?:fig:)?([A-Za-z0-9_\-]+)', header)
+            if m_al:
+                alias = m_al.group(1)
+
+            cleaned_lines = []
+            for line in code.splitlines():
+                line_s = line.strip()
+                if line_s.startswith("caption:"):
+                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("alias:"):
+                    alias = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("%% caption:"):
+                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("%% alias:"):
+                    alias = line_s.split(":", 1)[1].strip().strip("\"'")
+                else:
+                    cleaned_lines.append(line)
+            clean_code = "\n".join(cleaned_lines).strip()
+
+            if alias:
+                fig_id_map[alias] = fig_counter
+            fig_id_map[f"FIG-{fig_counter:03d}"] = fig_counter
+
+            cap_html = (
+                f'<div class="preview-caption figure-caption"><strong>Figure {fig_counter}</strong>'
+                f'{": " + caption if caption else ""}</div>'
+                if caption
+                else ""
+            )
+            anchor_id = alias or f"FIG-{fig_counter:03d}"
+            return (
+                f'\n<div class="preview-mermaid-wrapper" id="fig-{anchor_id}" style="text-align: center; margin: 1.5rem 0;">'
+                f'<pre class="mermaid">\n{clean_code}\n</pre>'
+                f'{cap_html}'
+                f'</div>\n'
+            )
+
+        content = re.sub(
+            r"^```mermaid(?:[ \t]+(?P<header>[^\n]*))?\n(?P<code>.*?)```[ \t]*$",
+            mermaid_preview_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        )
+
         # Pre-scan project workspace if available for global cross-file symbols
         if workspace_dir:
             try:
@@ -218,9 +315,6 @@ class HTMLPreviewGenerator:
                 pass
 
         # 3a. Resolve @table blocks for preview
-        tbl_counter = 0
-        fig_counter = 0
-
         def table_preview_repl(h: str, b: str, tr: str) -> str:
             nonlocal tbl_counter, fig_counter
             tbl_counter += 1
@@ -705,7 +799,9 @@ class HTMLPreviewGenerator:
             pandoc_bin,
             str(tmp_in_path),
             "-f",
-            "markdown+tex_math_dollars+pipe_tables+raw_html",
+            "markdown+tex_math_dollars+pipe_tables+raw_html"
+            "+fenced_code_blocks+backtick_code_blocks+fenced_code_attributes+task_lists"
+            "+strikeout+superscript+subscript+footnotes+definition_lists+smart",
             "-t",
             "html5",
             "--mathjax",

@@ -3,11 +3,14 @@
 import base64
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import yaml
 
 from engdoc.core.exceptions import DirectiveParseError
+from engdoc.figures.diagram_runner import DiagramRunner
+from engdoc.figures.service import format_figure_caption
 from engdoc.markup.models import DirectiveBlock, EMDDocument, FrontmatterMetadata
 
 # Regex patterns for EMD directives
@@ -375,9 +378,100 @@ class EMDParser:
         cls,
         emd_doc: EMDDocument,
         figure_resolver: Any = None,
+        workspace_dir: Path | None = None,
     ) -> str:
         """Pre-processes EMD body text into standard Pandoc-compatible markdown with directives."""
         content = convert_tsv_tables(emd_doc.body_markdown)
+        fig_counter = 0
+        table_counter = 0
+
+        # 0a. Transform Callouts / Admonitions (> [!NOTE], > [!TIP], etc.)
+        def callout_pandoc_repl(m: re.Match) -> str:
+            callout_type = m.group(1).upper()
+            title = (m.group(2) or "").strip()
+            body_raw = m.group(3)
+            cleaned_body = []
+            for line in body_raw.splitlines():
+                if line.startswith(">"):
+                    line = line[1:]
+                    if line.startswith(" "):
+                        line = line[1:]
+                cleaned_body.append(line)
+            inner_md = "\n".join(cleaned_body).strip()
+            payload = base64.b64encode(
+                json.dumps({"type": callout_type, "title": title}).encode("utf-8")
+            ).decode("ascii")
+            return f"\n\nENGDOC_CALLOUT_START:{payload}\n\n{inner_md}\n\nENGDOC_CALLOUT_END\n\n"
+
+        content = re.sub(
+            r"^>[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:([^\n]*))?\r?\n((?:>[^\n]*\r?\n?)*)",
+            callout_pandoc_repl,
+            content,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+
+        # 0b. Transform Mermaid diagram code blocks into figure images
+        def mermaid_pandoc_repl(m: re.Match) -> str:
+            nonlocal fig_counter
+            fig_counter += 1
+            header = m.group("header") or ""
+            raw_code = m.group("code")
+            caption = ""
+            alias = ""
+            width = "14cm"
+            alignment = "center"
+
+            m_cap = re.search(r'caption=["\']([^"\']+)["\']', header)
+            if m_cap:
+                caption = m_cap.group(1)
+            m_al = re.search(r'#(?:fig:)?([A-Za-z0-9_\-]+)', header)
+            if m_al:
+                alias = m_al.group(1)
+            m_w = re.search(r'width=["\']([^"\']+)["\']', header)
+            if m_w:
+                width = m_w.group(1)
+
+            cleaned_lines = []
+            for line in raw_code.splitlines():
+                line_s = line.strip()
+                if line_s.startswith("caption:"):
+                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("alias:"):
+                    alias = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("width:"):
+                    width = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("%% caption:"):
+                    caption = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("%% alias:"):
+                    alias = line_s.split(":", 1)[1].strip().strip("\"'")
+                elif line_s.startswith("%% width:"):
+                    width = line_s.split(":", 1)[1].strip().strip("\"'")
+                else:
+                    cleaned_lines.append(line)
+
+            clean_code = "\n".join(cleaned_lines).strip()
+            fig_id = alias or f"FIG-{fig_counter:03d}"
+
+            # Render to SVG
+            svg_path = DiagramRunner.render_mermaid_to_svg(clean_code, workspace_dir=workspace_dir)
+            if workspace_dir and svg_path.is_relative_to(workspace_dir.resolve()):
+                rel_path = str(svg_path.relative_to(workspace_dir.resolve())).replace("\\", "/")
+            else:
+                rel_path = str(svg_path).replace("\\", "/")
+
+            full_caption, _, _ = format_figure_caption(fig_id, caption, seq_number=fig_counter)
+            anchor_tag = f" ENGDOC_FIG_ANCHOR:{alias or fig_id}"
+            full_caption += anchor_tag
+
+            size_hint = f";width:{width}"
+            return f'\n![{full_caption}]({rel_path} "align:{alignment}{size_hint}"){{#fig:{fig_id} width="{width}"}}\n'
+
+        content = re.sub(
+            r"^```mermaid(?:[ \t]+(?P<header>[^\n]*))?\n(?P<code>.*?)```[ \t]*$",
+            mermaid_pandoc_repl,
+            content,
+            flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        )
 
         # Helper for OpenXML section marker
         def make_section_marker(params: dict[str, Any]) -> str:
@@ -447,9 +541,6 @@ class EMDParser:
         )
 
         # 5b. Transform @table blocks
-        table_counter = 0
-        fig_counter = 0
-
         def table_repl(h: str, b: str, tr: str) -> str:
             nonlocal table_counter, fig_counter
             table_counter += 1
@@ -549,6 +640,34 @@ class EMDParser:
                 params["alias"] = alias
 
             anchor_tag = f" ENGDOC_FIG_ANCHOR:{alias or fig_id}"
+            if params.get("type") == "mermaid" or any(
+                k in body_text.lower()
+                for k in ("flowchart", "sequencediagram", "graph td", "graph lr", "graph tb", "graph rl")
+            ):
+                m_lines = []
+                for line in body_text.splitlines():
+                    ls = line.strip().lower()
+                    if any(
+                        ls.startswith(k)
+                        for k in ("caption:", "width:", "height:", "alignment:", "placement:", "type:")
+                    ):
+                        continue
+                    m_lines.append(line)
+                m_code = "\n".join(m_lines).strip()
+                if m_code:
+                    svg_path = DiagramRunner.render_mermaid_to_svg(m_code, workspace_dir=workspace_dir)
+                    if workspace_dir and svg_path.is_relative_to(workspace_dir.resolve()):
+                        rel_path = str(svg_path.relative_to(workspace_dir.resolve())).replace("\\", "/")
+                    else:
+                        rel_path = str(svg_path).replace("\\", "/")
+                    caption = params.get("caption", "")
+                    width = params.get("width", "16cm")
+                    alignment = params.get("alignment", "center")
+                    full_caption, _, _ = format_figure_caption(fig_id, caption, seq_number=fig_counter)
+                    full_caption += anchor_tag
+                    size_hint = f";width:{width}"
+                    return f'\n![{full_caption}]({rel_path} "align:{alignment}{size_hint}"){{#fig:{fig_id} width="{width}"}}\n'
+
             if figure_resolver:
                 return f"{figure_resolver(fig_id, params)}\n{anchor_tag}\n"
 

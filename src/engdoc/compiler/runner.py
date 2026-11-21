@@ -71,11 +71,14 @@ class PandocRunner:
             pandoc_bin,
             str(tmp_in_path),
             "-f",
-            "markdown+yaml_metadata_block+raw_attribute+tex_math_dollars+table_captions+pipe_tables",
+            "markdown+yaml_metadata_block+raw_attribute+tex_math_dollars+table_captions+pipe_tables"
+            "+fenced_code_blocks+backtick_code_blocks+fenced_code_attributes+task_lists"
+            "+strikeout+superscript+subscript+footnotes+definition_lists+smart",
             "-t",
             "docx",
             "-o",
             str(output_path),
+            "--highlight-style=tango",
         ]
 
         if cwd and cwd.is_dir():

@@ -84,7 +84,7 @@ class PublishingService:
             )
 
         preprocessed_md = EMDParser.preprocess_for_pandoc(
-            emd_doc, figure_resolver=figure_resolver
+            emd_doc, figure_resolver=figure_resolver, workspace_dir=session.workspace_dir
         )
 
         # 5. Determine output path

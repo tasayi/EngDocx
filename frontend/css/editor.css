@@ -315,3 +315,98 @@
   padding-top: 8px;
 }
 
+/* Callouts & Admonitions */
+.preview-callout {
+  margin: 1.25rem 0;
+  border-radius: 6px;
+  padding: 0.85rem 1.15rem;
+  border: 1px solid transparent;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.preview-callout .callout-header {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.preview-callout .callout-content p {
+  margin: 0.35rem 0;
+}
+
+.preview-callout.callout-note {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 4px solid #3B82F6;
+  border-color: rgba(59, 130, 246, 0.25);
+  border-left-color: #3B82F6;
+}
+
+.preview-callout.callout-tip {
+  background: rgba(16, 185, 129, 0.08);
+  border-left: 4px solid #10B981;
+  border-color: rgba(16, 185, 129, 0.25);
+  border-left-color: #10B981;
+}
+
+.preview-callout.callout-important {
+  background: rgba(139, 92, 246, 0.08);
+  border-left: 4px solid #8B5CF6;
+  border-color: rgba(139, 92, 246, 0.25);
+  border-left-color: #8B5CF6;
+}
+
+.preview-callout.callout-warning {
+  background: rgba(245, 158, 11, 0.08);
+  border-left: 4px solid #F59E0B;
+  border-color: rgba(245, 158, 11, 0.25);
+  border-left-color: #F59E0B;
+}
+
+.preview-callout.callout-caution {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 4px solid #EF4444;
+  border-color: rgba(239, 68, 68, 0.25);
+  border-left-color: #EF4444;
+}
+
+/* Mermaid Diagrams Container */
+.preview-mermaid-wrapper {
+  background: rgba(248, 250, 252, 0.04);
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+  border: 1px solid rgba(226, 232, 240, 0.15);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-mermaid-wrapper pre.mermaid {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Code Blocks Styling */
+.preview-content pre,
+#preview-html-content pre,
+#full-preview-html-content pre {
+  background: #f8fafc;
+  border-left: 3.5px solid #6366f1;
+  border-top: 1px solid #e2e8f0;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.85rem 1.1rem;
+  font-family: Consolas, 'Fira Code', Menlo, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #0f172a;
+  overflow-x: auto;
+}
+
