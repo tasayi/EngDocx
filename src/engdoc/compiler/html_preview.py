@@ -66,7 +66,7 @@ class HTMLPreviewGenerator:
             )
             col_class = f"columns-{cols}" if cols in ("2", "3") else "columns-1"
             return (
-                f'\n</div>\n'
+                f"\n</div>\n"
                 f'<div class="preview-section-marker {b_type}" data-orientation="{orient}" data-columns="{cols}" data-type="{b_type}">'
                 f'<span class="section-tag">{tag_label}</span></div>\n'
                 f'<div class="preview-continuous-section {col_class}">\n'
@@ -107,7 +107,7 @@ class HTMLPreviewGenerator:
 
             col_class = f"columns-{cols}" if cols in ("2", "3") else "columns-1"
             return (
-                f'\n</div>\n'
+                f"\n</div>\n"
                 f'<div class="preview-section-marker {b_type}" data-orientation="{orient}" data-columns="{cols}" data-page="{page}" data-type="{b_type}">'
                 f'<span class="section-tag">{tag_label}</span></div>\n'
                 f'<div class="preview-continuous-section {col_class}">\n'
@@ -162,7 +162,7 @@ class HTMLPreviewGenerator:
                 f'\n<div class="preview-callout {type_class}">'
                 f'<div class="callout-header"><span class="callout-icon">{icon}</span> <strong>{display_title}</strong></div>'
                 f'<div class="callout-content">\n\n{inner_md}\n\n</div>'
-                f'</div>\n'
+                f"</div>\n"
             )
 
         content = re.sub(
@@ -183,7 +183,7 @@ class HTMLPreviewGenerator:
             m_cap = re.search(r'caption=["\']([^"\']+)["\']', header)
             if m_cap:
                 caption = m_cap.group(1)
-            m_al = re.search(r'#(?:fig:)?([A-Za-z0-9_\-]+)', header)
+            m_al = re.search(r"#(?:fig:)?([A-Za-z0-9_\-]+)", header)
             if m_al:
                 alias = m_al.group(1)
 
@@ -208,7 +208,7 @@ class HTMLPreviewGenerator:
 
             cap_html = (
                 f'<div class="preview-caption figure-caption"><strong>Figure {fig_counter}</strong>'
-                f'{": " + caption if caption else ""}</div>'
+                f"{': ' + caption if caption else ''}</div>"
                 if caption
                 else ""
             )
@@ -216,8 +216,8 @@ class HTMLPreviewGenerator:
             return (
                 f'\n<div class="preview-mermaid-wrapper" id="fig-{anchor_id}" style="text-align: center; margin: 1.5rem 0;">'
                 f'<pre class="mermaid">\n{clean_code}\n</pre>'
-                f'{cap_html}'
-                f'</div>\n'
+                f"{cap_html}"
+                f"</div>\n"
             )
 
         content = re.sub(
@@ -331,7 +331,7 @@ class HTMLPreviewGenerator:
 
             cap_html = (
                 f'<div class="preview-caption table-caption"><strong>Table {tbl_counter}</strong>'
-                f'{": " + caption if caption else ""}</div>'
+                f"{': ' + caption if caption else ''}</div>"
                 if caption
                 else ""
             )
@@ -391,7 +391,7 @@ class HTMLPreviewGenerator:
                                     f'<div class="figure-placeholder" style="max-width: {fwidth}; margin: 0 auto;">'
                                     f'<div class="ph-icon">🖼️</div>'
                                     f'<div class="ph-id">{fid}</div>'
-                                    f'</div>'
+                                    f"</div>"
                                 )
 
                             fig_html = (
@@ -406,11 +406,17 @@ class HTMLPreviewGenerator:
                                 f'<td style="vertical-align: top; text-align: center; width: {col_width}; padding: 12px;">{fig_html}</td>'
                             )
                         else:
-                            tds.append(f'<td style="vertical-align: top; width: {col_width};">{cell}</td>')
+                            tds.append(
+                                f'<td style="vertical-align: top; width: {col_width};">{cell}</td>'
+                            )
                     else:
-                        tds.append(f'<td style="vertical-align: top; width: {col_width};">{cell}</td>')
+                        tds.append(
+                            f'<td style="vertical-align: top; width: {col_width};">{cell}</td>'
+                        )
 
-                table_content = f'<table class="preview-table"><tbody><tr>{"".join(tds)}</tr></tbody></table>'
+                table_content = (
+                    f'<table class="preview-table"><tbody><tr>{"".join(tds)}</tr></tbody></table>'
+                )
                 return (
                     f'\n<div class="{" ".join(classes)}" id="tbl-{tbl_id}">\n'
                     f"{cap_html}\n"
@@ -488,7 +494,9 @@ class HTMLPreviewGenerator:
                             img_src = f"/api/projects/{session_id}/assets/figures/{fig_id}{ext}"
                             break
                         elif cand2.is_file():
-                            img_src = f"/api/projects/{session_id}/assets/assets/figures/{fig_id}{ext}"
+                            img_src = (
+                                f"/api/projects/{session_id}/assets/assets/figures/{fig_id}{ext}"
+                            )
                             break
 
             img_style = f"width: {width}; max-width: 100%;"
@@ -610,14 +618,14 @@ class HTMLPreviewGenerator:
                     f'<li id="ref-{key}" class="preview-reference-item">'
                     f'<span class="ref-num">[{idx}]</span> '
                     f'<span class="ref-text">{text}</span>'
-                    f'</li>'
+                    f"</li>"
                 )
             items_html = "\n".join(items)
             return (
                 f'\n<section class="preview-references" id="references">\n'
-                f'<h3>References</h3>\n'
+                f"<h3>References</h3>\n"
                 f'<ol class="preview-references-list">\n{items_html}\n</ol>\n'
-                f'</section>\n'
+                f"</section>\n"
             )
 
         content = re.sub(
@@ -821,6 +829,7 @@ class HTMLPreviewGenerator:
 
         # 5. Rewrite any relative <img> paths to workspace assets endpoint
         if session_id:
+
             def rewrite_img_src(match: re.Match) -> str:
                 prefix = match.group(1)
                 src = match.group(2)
@@ -835,16 +844,23 @@ class HTMLPreviewGenerator:
             )
 
         html_out = cls._enhance_preview_equations(html_out)
+        html_out = cls._wrap_bare_tables(html_out)
 
         headings_count = len(re.findall(r"^#{1,6}\s+", content, flags=re.MULTILINE))
-        equations_count = len(
-            re.findall(r"\$\$.*?\$\$|\$[^\$]+?\$", content, flags=re.DOTALL)
-        )
-        tables_count = 1 if re.search(r"^\|.*?\|[ \t]*$", content, flags=re.MULTILINE) else 0
+        equations_count = len(re.findall(r"\$\$.*?\$\$|\$[^\$]+?\$", content, flags=re.DOTALL))
+        tables_count = len(re.findall(r"<table\b", html_out, re.IGNORECASE))
+        if tables_count == 0 and re.search(r"^\|.*?\|[ \t]*$", content, flags=re.MULTILINE):
+            tables_count = 1
+
+        doc_title = emd_doc.frontmatter.title
+        if not doc_title:
+            m_title = re.search(r"^#[ \t]+([^\n]+)", emd_text, re.MULTILINE)
+            if m_title:
+                doc_title = m_title.group(1).strip()
 
         return PreviewPayload(
             html=html_out,
-            title=emd_doc.frontmatter.title or "",
+            title=doc_title or "",
             document_number=emd_doc.frontmatter.document_number or "",
             revision=emd_doc.frontmatter.revision or "",
             stats={
@@ -936,3 +952,28 @@ class HTMLPreviewGenerator:
                 i += 1
 
         return "".join(out)
+
+    @classmethod
+    def _wrap_bare_tables(cls, html: str) -> str:
+        """Wraps any <table> not inside .preview-table-container into a responsive preview container."""
+        pattern = re.compile(r"<table\b[^>]*>.*?</table>", re.DOTALL | re.IGNORECASE)
+        parts = []
+        last_end = 0
+        for m in pattern.finditer(html):
+            tbl = m.group(0)
+            prefix = html[last_end : m.start()]
+            full_prefix = html[: m.start()]
+            last_container = full_prefix.rfind('<div class="preview-table-container')
+            last_div_close = full_prefix.rfind("</div>")
+            is_inside = last_container != -1 and last_container > last_div_close
+
+            parts.append(prefix)
+            if not is_inside:
+                parts.append(
+                    f'<div class="preview-table-container align-center border-single theme-light row-banding">\n{tbl}\n</div>'
+                )
+            else:
+                parts.append(tbl)
+            last_end = m.end()
+        parts.append(html[last_end:])
+        return "".join(parts)

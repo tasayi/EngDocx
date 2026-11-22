@@ -1,5 +1,13 @@
 -- Pandoc Lua Filter for EngDoc EMD Directives
 
+function RawInline(el)
+  -- Transform raw HTML <br> or <br/> into native Pandoc LineBreak
+  if el.format == 'html' and el.text:match('^<[bB][rR]%s*/?>$') then
+    return pandoc.LineBreak()
+  end
+  return el
+end
+
 function Div(el)
   -- Intercept Pagebreak Divs
   if el.classes:includes('pagebreak') then
