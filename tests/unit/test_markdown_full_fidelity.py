@@ -1,10 +1,13 @@
 """Unit tests for Full Markdown Fidelity: Mermaid diagrams, Code blocks, Callouts, and Extended MD."""
 
+import base64
 import tempfile
 import zipfile
 from pathlib import Path
 
+import docx
 import pytest
+from docx.shared import Pt
 from lxml import etree
 
 from engdoc.compiler.html_preview import HTMLPreviewGenerator
@@ -15,6 +18,7 @@ from engdoc.figures.diagram_runner import (
     render_builtin_mermaid_svg,
 )
 from engdoc.markup.parser import EMDParser
+from engdoc.templates.manager import TemplateManager
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NSMAP = {"w": W_NS}
@@ -113,6 +117,130 @@ flowchart TD
         with zipfile.ZipFile(out_docx) as z:
             doc_xml = z.read("word/document.xml").decode("utf-8")
             assert "Figure 1" in doc_xml or "REF _Ref_Fig_sys_flow" in doc_xml
+
+
+def test_postprocessor_does_not_rewrite_body_paragraphs_as_object_captions():
+    """Ordinary prose after figures/tables may begin with those words and must retain formatting."""
+    w = f"{{{W_NS}}}"
+    root = etree.Element(f"{w}document", nsmap={"w": W_NS})
+    body = etree.SubElement(root, f"{w}body")
+
+    image_paragraph = etree.SubElement(body, f"{w}p")
+    image_run = etree.SubElement(image_paragraph, f"{w}r")
+    etree.SubElement(image_run, f"{w}drawing")
+
+    figure_text = etree.SubElement(body, f"{w}p")
+    figure_run = etree.SubElement(figure_text, f"{w}r")
+    figure_run_props = etree.SubElement(figure_run, f"{w}rPr")
+    etree.SubElement(figure_run_props, f"{w}b")
+    figure_run_text = etree.SubElement(figure_run, f"{w}t")
+    figure_run_text.text = "Figure response"
+    figure_run_2 = etree.SubElement(figure_text, f"{w}r")
+    figure_run_2_props = etree.SubElement(figure_run_2, f"{w}rPr")
+    etree.SubElement(figure_run_2_props, f"{w}i")
+    figure_run_2_text = etree.SubElement(figure_run_2, f"{w}t")
+    figure_run_2_text.text = " remains bold and italic."
+
+    first_table = etree.SubElement(body, f"{w}tbl")
+    etree.SubElement(first_table, f"{w}tr")
+
+    table_text = etree.SubElement(body, f"{w}p")
+    table_run = etree.SubElement(table_text, f"{w}r")
+    table_run_props = etree.SubElement(table_run, f"{w}rPr")
+    etree.SubElement(table_run_props, f"{w}i")
+    table_run_text = etree.SubElement(table_run, f"{w}t")
+    table_run_text.text = "Table measurements continue in prose."
+
+    second_table = etree.SubElement(body, f"{w}tbl")
+    etree.SubElement(second_table, f"{w}tr")
+    etree.SubElement(body, f"{w}sectPr")
+
+    processed = DocxPostprocessor._process_document_xml(
+        etree.tostring(root), initial_layout=None
+    )
+    processed_root = etree.fromstring(processed)
+    paragraphs = processed_root.xpath(".//w:body/w:p", namespaces=NSMAP)
+    paragraph_texts = ["".join(p.xpath(".//w:t/text()", namespaces=NSMAP)) for p in paragraphs]
+
+    assert "Figure response remains bold and italic." in paragraph_texts
+    assert "Table measurements continue in prose." in paragraph_texts
+    figure_para = next(p for p in paragraphs if "Figure response" in "".join(p.xpath(".//w:t/text()", namespaces=NSMAP)))
+    table_para = next(p for p in paragraphs if "Table measurements" in "".join(p.xpath(".//w:t/text()", namespaces=NSMAP)))
+    assert figure_para.xpath(".//w:b", namespaces=NSMAP)
+    assert figure_para.xpath(".//w:i", namespaces=NSMAP)
+    assert table_para.xpath(".//w:i", namespaces=NSMAP)
+
+
+@pytest.mark.asyncio
+async def test_ordered_list_paragraphs_keep_numbering_and_inline_formatting_after_objects(
+    tmp_path: Path,
+):
+    """Body/list style variants use the template body font without losing list/run formatting."""
+    markdown = """Introductory paragraph in the custom body style.
+
+@table
+  caption: Band summary
+| Band | Bandwidth |
+| --- | --- |
+| Low | 430 MHz |
+@end {#tbl:bands}
+
+1. **Full Channel Wideband Mode (BWB)**: passband for each receiver channel.
+2. **Channelized Narrowband Modes (B1, B2, B3)**: processed in the DDC.
+
+![Receiver architecture](receiver.png)
+
+3. **Digital decimation processing gain** is defined as follows.
+"""
+    template = docx.Document(TemplateManager.ensure_default_template())
+    template.styles["Body Text"].font.name = "Arial"
+    template.styles["Body Text"].font.size = Pt(10)
+    template.styles["First Paragraph"].font.name = "Calibri"
+    template.styles["First Paragraph"].font.size = Pt(11)
+    template.styles["Compact"].font.name = "Arial"
+    template.styles["Compact"].font.size = Pt(10)
+    reference_docx = tmp_path / "reference.docx"
+    template.save(reference_docx)
+    (tmp_path / "receiver.png").write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )
+    )
+
+    output = tmp_path / "ordered-list-formatting.docx"
+    result = await PandocRunner.compile_to_docx(
+        EMDParser.preprocess_for_pandoc(EMDParser.parse(markdown)),
+        output,
+        reference_docx=reference_docx,
+        cwd=tmp_path,
+    )
+    assert result.success
+
+    DocxPostprocessor.process(output)
+
+    with zipfile.ZipFile(output) as package:
+        root = etree.fromstring(package.read("word/document.xml"))
+
+    listed_paragraphs = []
+    for paragraph in root.xpath("//w:body/w:p", namespaces=NSMAP):
+        text = "".join(paragraph.xpath(".//w:t/text()", namespaces=NSMAP))
+        if "Full Channel Wideband Mode" in text or "Digital decimation processing gain" in text:
+            listed_paragraphs.append((text, paragraph))
+
+    assert len(listed_paragraphs) == 2
+    for text, paragraph in listed_paragraphs:
+        assert paragraph.xpath("./w:pPr/w:numPr", namespaces=NSMAP), text
+        assert paragraph.xpath(".//w:rPr/w:b", namespaces=NSMAP), text
+
+    compiled = docx.Document(output)
+    body_style = compiled.styles["Body Text"]
+    for style_name in ("First Paragraph", "Compact"):
+        style = compiled.styles[style_name]
+        assert style.base_style.name == "Body Text"
+        assert style.font.name is None
+        assert style.font.size is None
+    assert body_style.font.name == "Calibri"
+    assert body_style.font.size == Pt(11)
 
 
 @pytest.mark.asyncio

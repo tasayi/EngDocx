@@ -158,6 +158,17 @@ class DocxPostprocessor:
         for c in sorted_children:
             pPr.append(c)
 
+    @staticmethod
+    def _is_explicit_caption_text(text: str, label: str) -> bool:
+        """Matches only caption-like labels with a delimiter, not ordinary prose such as 'Figure shows'."""
+        return bool(
+            re.match(
+                rf"^{re.escape(label)}(?:\s+[A-Za-z0-9_][A-Za-z0-9_.-]*)?\s*[:.\-]\s*\S",
+                text.strip(),
+                re.IGNORECASE,
+            )
+        )
+
     @classmethod
     def _make_caption_runs(
         cls,
@@ -324,6 +335,8 @@ class DocxPostprocessor:
                             has_table_grid,
                             initial_layout_params,
                         )
+                    elif item.filename == "word/styles.xml":
+                        data = cls._normalize_body_paragraph_fonts(data)
                     elif item.filename == "word/numbering.xml":
                         data = cls._process_numbering_xml(data)
                     elif item.filename.endswith(".rels"):
@@ -596,7 +609,9 @@ class DocxPostprocessor:
             text = "".join(t.text or "" for t in prev.xpath(".//w:t", namespaces=NSMAP))
             tbl_anchors = re.findall(r"ENGDOC_TBL_ANCHOR:([A-Za-z0-9_\-]+)", text)
             clean_text = re.sub(r"ENGDOC_TBL_ANCHOR:[A-Za-z0-9_\-]+", "", text).strip()
-            if style_val != "TableCaption" and not TABLE_CAPTION_PREFIX_RE.match(clean_text):
+            if style_val != "TableCaption" and not cls._is_explicit_caption_text(
+                clean_text, "Table"
+            ):
                 continue
 
             pPr = prev.find(f"{w}pPr")
@@ -662,8 +677,8 @@ class DocxPostprocessor:
             full_txt = "".join(t.text or "" for t in elem.xpath(".//w:t", namespaces=NSMAP)).strip()
             clean_txt = re.sub(r"ENGDOC_EQ_ANCHOR:[A-Za-z0-9_\-]+", "", full_txt).strip()
             if style_val in ("EquationCaption", "Caption"):
-                return bool(EQUATION_CAPTION_PREFIX_RE.match(clean_txt))
-            return bool(EQUATION_CAPTION_PREFIX_RE.match(clean_txt))
+                return True
+            return cls._is_explicit_caption_text(clean_txt, "Equation")
 
         all_paragraphs = list(body.findall(f"{w}p"))
         for p in all_paragraphs:
@@ -987,6 +1002,101 @@ class DocxPostprocessor:
                 if candidate in ids:
                     return candidate
         return "Caption"
+
+    @classmethod
+    def _normalize_body_paragraph_fonts(cls, styles_xml: bytes) -> bytes:
+        """Make Pandoc's body-like paragraph styles inherit the template's Body Text font."""
+        if not styles_xml:
+            return styles_xml
+
+        root = etree.fromstring(styles_xml)
+        w = f"{{{W_NS}}}"
+        styles = {
+            style.get(f"{w}styleId"): style
+            for style in root.findall(f"{w}style")
+            if style.get(f"{w}styleId")
+        }
+        body_style = styles.get("BodyText")
+        if body_style is None:
+            return styles_xml
+
+        # Pandoc uses these styles for ordinary paragraphs and compact/list paragraphs.
+        # Use First Paragraph's effective font as the canonical body font when available,
+        # while keeping all paragraph properties (including list spacing) unchanged.
+        font_properties = ("rFonts", "sz", "szCs", "color")
+        font_property_names = set(font_properties)
+        first_paragraph_style = styles.get("FirstParagraph")
+        canonical_style = first_paragraph_style if first_paragraph_style is not None else body_style
+        inherited_properties: dict[str, etree._Element] = {}
+        seen_styles: set[str] = set()
+        current_style = canonical_style
+        while current_style is not None:
+            current_id = current_style.get(f"{w}styleId") or ""
+            if current_id in seen_styles:
+                break
+            seen_styles.add(current_id)
+            r_pr = current_style.find(f"{w}rPr")
+            if r_pr is not None:
+                for prop in r_pr:
+                    name = etree.QName(prop).localname
+                    if name in font_property_names and name not in inherited_properties:
+                        inherited_properties[name] = copy.deepcopy(prop)
+            based_on = current_style.find(f"{w}basedOn")
+            current_style = styles.get(based_on.get(f"{w}val")) if based_on is not None else None
+
+        if "rFonts" not in inherited_properties or "sz" not in inherited_properties:
+            defaults = root.find(f"{w}docDefaults/{w}rPrDefault/{w}rPr")
+            if defaults is not None:
+                for prop in defaults:
+                    name = etree.QName(prop).localname
+                    if name in font_property_names and name not in inherited_properties:
+                        inherited_properties[name] = copy.deepcopy(prop)
+
+        body_r_pr = body_style.find(f"{w}rPr")
+        if body_r_pr is None:
+            body_r_pr = etree.Element(f"{w}rPr")
+            body_style.append(body_r_pr)
+        for prop in list(body_r_pr):
+            if etree.QName(prop).localname in font_property_names:
+                body_r_pr.remove(prop)
+
+        property_order = {"rFonts": 10, "color": 100, "sz": 150, "szCs": 160}
+        for name in font_properties:
+            prop = inherited_properties.get(name)
+            if prop is None:
+                continue
+            insert_at = len(body_r_pr)
+            for index, existing in enumerate(body_r_pr):
+                existing_order = property_order.get(etree.QName(existing).localname, 1000)
+                if existing_order > property_order[name]:
+                    insert_at = index
+                    break
+            body_r_pr.insert(insert_at, prop)
+
+        if not len(body_r_pr):
+            body_style.remove(body_r_pr)
+
+        for style_id in ("FirstParagraph", "Compact"):
+            style = styles.get(style_id)
+            if style is None:
+                continue
+
+            based_on = style.find(f"{w}basedOn")
+            if based_on is None:
+                based_on = etree.Element(f"{w}basedOn")
+                name = style.find(f"{w}name")
+                style.insert(style.index(name) + 1 if name is not None else 0, based_on)
+            based_on.set(f"{w}val", "BodyText")
+
+            r_pr = style.find(f"{w}rPr")
+            if r_pr is not None:
+                for prop in list(r_pr):
+                    if etree.QName(prop).localname in font_property_names:
+                        r_pr.remove(prop)
+                if not len(r_pr):
+                    style.remove(r_pr)
+
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     @classmethod
     def _drop_dangling_rels(cls, rels_name: str, data: bytes, names: set[str]) -> bytes:
@@ -1470,7 +1580,7 @@ class DocxPostprocessor:
                     is_caption = p_style_val in (
                         "ImageCaption",
                         "Caption",
-                    ) or next_text.lower().startswith("figure")
+                    ) or cls._is_explicit_caption_text(next_text, "Figure")
 
                     if is_caption:
                         if next_pPr is None:
