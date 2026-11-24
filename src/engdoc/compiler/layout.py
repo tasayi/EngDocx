@@ -86,25 +86,34 @@ class SectionLayout:
         cls, params: dict, previous_layout: "SectionLayout | None" = None
     ) -> "SectionLayout":
         """Instantiates SectionLayout from a dictionary of directive parameters."""
-        orient_raw = str(params.get("orientation", "portrait")).strip().lower()
+        previous = previous_layout or cls()
+        orient_raw = str(params.get("orientation", previous.orientation)).strip().lower()
         orientation: Literal["portrait", "landscape"] = (
             "landscape" if "land" in orient_raw else "portrait"
         )
-        page = str(params.get("page", "A4")).strip().upper()
+        page = str(params.get("page", previous.page)).strip().upper()
         if page not in PAGE_SIZES_DXA:
-            page = "A4"
+            page = previous.page
 
         try:
-            cols = int(params.get("columns", 1))
+            cols = int(params.get("columns", previous.columns))
             cols = max(1, min(3, cols))
         except (ValueError, TypeError):
-            cols = 1
+            cols = previous.columns
 
         # Margins
-        top = parse_dimension_to_dxa(params.get("margin_top", params.get("margin", 1440)))
-        bottom = parse_dimension_to_dxa(params.get("margin_bottom", params.get("margin", 1440)))
-        left = parse_dimension_to_dxa(params.get("margin_left", params.get("margin", 1440)))
-        right = parse_dimension_to_dxa(params.get("margin_right", params.get("margin", 1440)))
+        top = parse_dimension_to_dxa(
+            params.get("margin_top", params.get("margin", previous.margin_top_dxa))
+        )
+        bottom = parse_dimension_to_dxa(
+            params.get("margin_bottom", params.get("margin", previous.margin_bottom_dxa))
+        )
+        left = parse_dimension_to_dxa(
+            params.get("margin_left", params.get("margin", previous.margin_left_dxa))
+        )
+        right = parse_dimension_to_dxa(
+            params.get("margin_right", params.get("margin", previous.margin_right_dxa))
+        )
 
         # Determine break type (MS Word: continuous, nextPage, evenPage, oddPage)
         raw_type = str(params.get("type", params.get("break", ""))).strip().lower()
@@ -128,14 +137,79 @@ class SectionLayout:
             # Same sheet layout change (columns, margins) defaults to continuous!
             break_type = "continuous"
 
+        custom_size_changed = "page" in params or "orientation" in params
         return cls(
             orientation=orientation,
             page=page,
             columns=cols,
+            column_space_dxa=parse_dimension_to_dxa(
+                params.get("column_space", previous.column_space_dxa)
+            ),
             margin_top_dxa=top,
             margin_bottom_dxa=bottom,
             margin_left_dxa=left,
             margin_right_dxa=right,
+            margin_header_dxa=parse_dimension_to_dxa(
+                params.get("margin_header", previous.margin_header_dxa)
+            ),
+            margin_footer_dxa=parse_dimension_to_dxa(
+                params.get("margin_footer", previous.margin_footer_dxa)
+            ),
+            custom_width_dxa=None if custom_size_changed else previous.custom_width_dxa,
+            custom_height_dxa=None if custom_size_changed else previous.custom_height_dxa,
+            break_type=break_type,
+        )
+
+    @classmethod
+    def from_sect_pr(cls, sect_pr: etree._Element) -> "SectionLayout":
+        """Reads the page geometry Pandoc copied from the reference DOCX section."""
+        pg_sz = sect_pr.find(f"{{{W_NS}}}pgSz")
+        pg_mar = sect_pr.find(f"{{{W_NS}}}pgMar")
+        cols = sect_pr.find(f"{{{W_NS}}}cols")
+
+        try:
+            width = int(pg_sz.get(f"{{{W_NS}}}w", "0")) if pg_sz is not None else 0
+            height = int(pg_sz.get(f"{{{W_NS}}}h", "0")) if pg_sz is not None else 0
+        except ValueError:
+            width, height = 0, 0
+
+        orientation: Literal["portrait", "landscape"] = (
+            "landscape"
+            if (pg_sz is not None and pg_sz.get(f"{{{W_NS}}}orient") == "landscape")
+            or width > height
+            else "portrait"
+        )
+        page = "A4"
+        custom_width = width or None
+        custom_height = height or None
+        for page_name, orientations in PAGE_SIZES_DXA.items():
+            if orientations.get(orientation) == (width, height):
+                page = page_name
+                custom_width = None
+                custom_height = None
+                break
+
+        def read_attr(element: etree._Element | None, name: str, default: int) -> int:
+            try:
+                return int(element.get(f"{{{W_NS}}}{name}", str(default))) if element is not None else default
+            except ValueError:
+                return default
+
+        section_type = sect_pr.find(f"{{{W_NS}}}type")
+        break_type = section_type.get(f"{{{W_NS}}}val", "continuous") if section_type is not None else "continuous"
+        return cls(
+            orientation=orientation,
+            page=page,
+            columns=max(1, min(3, read_attr(cols, "num", 1))),
+            column_space_dxa=read_attr(cols, "space", 720),
+            margin_top_dxa=read_attr(pg_mar, "top", 1440),
+            margin_bottom_dxa=read_attr(pg_mar, "bottom", 1440),
+            margin_left_dxa=read_attr(pg_mar, "left", 1440),
+            margin_right_dxa=read_attr(pg_mar, "right", 1440),
+            margin_header_dxa=read_attr(pg_mar, "header", 720),
+            margin_footer_dxa=read_attr(pg_mar, "footer", 720),
+            custom_width_dxa=custom_width,
+            custom_height_dxa=custom_height,
             break_type=break_type,
         )
 

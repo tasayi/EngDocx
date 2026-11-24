@@ -6,13 +6,12 @@ from pathlib import Path
 
 import docx
 
-from engdoc.compiler.layout import SectionLayout
 from engdoc.compiler.pdf_runner import PDFRunner
 from engdoc.compiler.postprocess import DocxPostprocessor
 from engdoc.compiler.runner import CompilationResult, PandocRunner
 from engdoc.core.exceptions import ProjectArchiveError
 from engdoc.figures.service import FigureService
-from engdoc.markup.parser import EMDParser
+from engdoc.markup.parser import FRONTMATTER_REGEX, EMDParser
 from engdoc.project.session import ProjectSession
 from engdoc.templates.manager import TemplateManager
 
@@ -55,17 +54,24 @@ class PublishingService:
             ordered_docs = [entry_file]
 
         content_parts: list[str] = []
+        entry_frontmatter = ""
         for i, doc_path in enumerate(ordered_docs):
             file_text = doc_path.read_text(encoding="utf-8")
+            if doc_path.resolve() == entry_file.resolve():
+                frontmatter_match = FRONTMATTER_REGEX.match(file_text)
+                if frontmatter_match:
+                    entry_frontmatter = frontmatter_match.group(0)
+
+            _, body_content = EMDParser.parse_frontmatter(file_text)
             if i == 0:
-                # Master document provides the document-level frontmatter
-                content_parts.append(file_text)
+                content_parts.append(body_content)
             else:
                 # Strip frontmatter from secondary chapters to prevent Pandoc parsing conflicts
-                _, body_content = EMDParser.parse_frontmatter(file_text)
                 content_parts.append(f"\n\n@pagebreak\n\n{body_content.strip()}")
 
-        raw_text = "\n".join(content_parts)
+        # Frontmatter belongs to the configured entry point, regardless of its position in
+        # the user-defined chapter order. Keep it at the start so the parser and Pandoc see it.
+        raw_text = f"{entry_frontmatter}\n\n{''.join(content_parts)}"
         emd_doc = EMDParser.parse(raw_text)
 
         # 2. Prepare all registered figures and ensure compiled assets in .cache/
@@ -107,8 +113,7 @@ class PublishingService:
         # 7. Post-process OpenXML DOM to inject multi-section layouts
         if res.success and target_docx.is_file():
             initial_params = dict(emd_doc.frontmatter.extra)
-            initial_layout = SectionLayout.from_params(initial_params)
-            DocxPostprocessor.process(target_docx, initial_layout=initial_layout)
+            DocxPostprocessor.process(target_docx, initial_layout_params=initial_params)
 
             # Validate output DOCX integrity
             cls.validate_generated_docx(target_docx)

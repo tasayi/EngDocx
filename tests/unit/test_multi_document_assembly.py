@@ -3,16 +3,20 @@
 import zipfile
 from pathlib import Path
 
+import docx
 import pytest
+from docx.shared import Inches, RGBColor
 from fastapi.testclient import TestClient
 from lxml import etree
 
 from engdoc.api.app import app
 from engdoc.compiler.html_preview import HTMLPreviewGenerator
 from engdoc.compiler.layout import W_NS
+from engdoc.compiler.runner import CompilationResult, PandocRunner
 from engdoc.project.models import ProjectManifest
 from engdoc.project.session import SessionManager
 from engdoc.publishing.service import PublishingService
+from engdoc.templates.manager import TemplateManager
 
 client = TestClient(app)
 NSMAP = {"w": W_NS}
@@ -96,6 +100,117 @@ def test_session_document_discovery_and_reorder_api():
         assert "content/03_verification.md" not in session.manifest.documents
         assert len(session.get_tree().documents) == 2
 
+    finally:
+        SessionManager.close_session(sess_id)
+
+
+@pytest.mark.asyncio
+async def test_publishing_uses_entry_point_template_when_entry_point_is_reordered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = ProjectManifest(
+        project_name="Reordered Template Project",
+        document_number="TPL-001",
+        revision="A",
+        entry_point="content/01_intro.md",
+        documents=["content/02_chapter.md", "content/01_intro.md"],
+        template={"default": "templates/fallback.docx"},
+    )
+    session = SessionManager.create_new_session(manifest)
+    sess_id = session.session_id
+
+    try:
+        session.write_file(
+            "content/01_intro.md",
+            "---\ntitle: Template Test\ntemplate: entrypoint-template.docx\n---\n\n# Master chapter\n",
+        )
+        session.create_file("content/02_chapter.md", "# Earlier chapter\n")
+
+        project_template = session.workspace_dir / "templates" / "entrypoint-template.docx"
+        project_template.parent.mkdir(parents=True, exist_ok=True)
+        project_template.touch()
+        default_template = tmp_path / "default.docx"
+        default_template.touch()
+        monkeypatch.setattr(
+            TemplateManager,
+            "ensure_default_template",
+            classmethod(lambda cls: default_template),
+        )
+
+        captured: dict[str, str | Path | None] = {}
+
+        async def fake_compile_to_docx(
+            cls,
+            markdown_text: str,
+            output_path: Path,
+            reference_docx: Path | None = None,
+            **kwargs,
+        ) -> CompilationResult:
+            captured["markdown_text"] = markdown_text
+            captured["reference_docx"] = reference_docx
+            return CompilationResult(success=False, stderr="test compile intercepted")
+
+        monkeypatch.setattr(PandocRunner, "compile_to_docx", classmethod(fake_compile_to_docx))
+
+        await PublishingService.compile_session_docx(session)
+
+        assert captured["reference_docx"] == project_template.resolve()
+        markdown_text = str(captured["markdown_text"])
+        assert markdown_text.index("Earlier chapter") < markdown_text.index("Master chapter")
+    finally:
+        SessionManager.close_session(sess_id)
+
+
+@pytest.mark.asyncio
+async def test_multi_document_publish_preserves_frontmatter_reference_template_formatting(
+    tmp_path: Path,
+):
+    manifest = ProjectManifest(
+        project_name="Custom Template Multi-Document Project",
+        document_number="TPL-002",
+        revision="A",
+        entry_point="content/main.md",
+        documents=["content/main.md", "content/chapter.md"],
+        template={"default": "templates/fallback.docx"},
+    )
+    session = SessionManager.create_new_session(manifest)
+    sess_id = session.session_id
+
+    try:
+        template_path = session.workspace_dir / "templates" / "default_engineering.docx"
+        template_path.parent.mkdir(parents=True, exist_ok=True)
+        custom_template = docx.Document(TemplateManager.ensure_default_template())
+        custom_template.styles["Heading 1"].font.color.rgb = RGBColor(0x12, 0x34, 0x56)
+        custom_template.sections[0].page_width = Inches(7.5)
+        custom_template.sections[0].page_height = Inches(10)
+        custom_template.sections[0].top_margin = Inches(0.5)
+        custom_template.sections[0].left_margin = Inches(0.75)
+        custom_template.save(template_path)
+
+        session.write_file(
+            "content/main.md",
+            "---\n"
+            'title: "AiONS Multi-Channel Wideband Receiver Architecture System Analysis"\n'
+            'document_number: "CT2027-xxx-xxx"\n'
+            'revision: "A"\n'
+            "author:\n"
+            'date: "2026-11-24"\n'
+            'template: "default_engineering.docx"\n'
+            "---\n\n"
+            "# Main chapter\n\nFirst page.\n",
+        )
+        session.create_file("content/chapter.md", "# Secondary chapter\n\nSecond page.\n")
+
+        result = await PublishingService.compile_session_docx(session)
+        assert result.success and result.output_path is not None
+
+        output = docx.Document(result.output_path)
+        assert output.styles["Heading 1"].font.color.rgb == RGBColor(0x12, 0x34, 0x56)
+        assert output.sections[0].page_width == Inches(7.5)
+        assert output.sections[0].page_height == Inches(10)
+        assert output.sections[0].top_margin == Inches(0.5)
+        assert output.sections[0].left_margin == Inches(0.75)
+        assert any(p.text == "Secondary chapter" for p in output.paragraphs)
     finally:
         SessionManager.close_session(sess_id)
 

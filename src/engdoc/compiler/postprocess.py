@@ -291,13 +291,12 @@ class DocxPostprocessor:
         cls,
         docx_path: Path,
         initial_layout: SectionLayout | None = None,
+        initial_layout_params: dict[str, Any] | None = None,
     ) -> Path:
         """Parses word/document.xml in docx_path and rewrites section breaks and figure formatting."""
         docx_path = docx_path.resolve()
         if not docx_path.is_file():
             raise FileNotFoundError(f"DOCX file not found: {docx_path}")
-
-        current_layout = initial_layout or SectionLayout()
 
         # Temporary file for atomic rewrite
         tmp_fd, tmp_docx_path_str = tempfile.mkstemp(
@@ -319,7 +318,11 @@ class DocxPostprocessor:
                     data = z_in.read(item.filename)
                     if item.filename == "word/document.xml":
                         data = cls._process_document_xml(
-                            data, current_layout, caption_style, has_table_grid
+                            data,
+                            initial_layout,
+                            caption_style,
+                            has_table_grid,
+                            initial_layout_params,
                         )
                     elif item.filename == "word/numbering.xml":
                         data = cls._process_numbering_xml(data)
@@ -1351,15 +1354,29 @@ class DocxPostprocessor:
     def _process_document_xml(
         cls,
         xml_bytes: bytes,
-        initial_layout: SectionLayout,
+        initial_layout: SectionLayout | None,
         caption_style: str = "Caption",
         has_table_grid: bool = False,
+        initial_layout_params: dict[str, Any] | None = None,
     ) -> bytes:
         """Transforms word/document.xml with section properties and figure styling."""
         root = etree.fromstring(xml_bytes)
         body = root.find(f"{{{W_NS}}}body")
         if body is None:
             return xml_bytes
+
+        template_sect_pr = body.find(f"{{{W_NS}}}sectPr")
+        if template_sect_pr is None:
+            section_paragraphs = body.xpath("./w:p/w:pPr/w:sectPr", namespaces=NSMAP)
+            template_sect_pr = section_paragraphs[-1] if section_paragraphs else None
+        template_layout = (
+            SectionLayout.from_sect_pr(template_sect_pr)
+            if template_sect_pr is not None
+            else SectionLayout()
+        )
+        effective_initial_layout = initial_layout or SectionLayout.from_params(
+            initial_layout_params or {}, previous_layout=template_layout
+        )
 
         target_map: dict[tuple[str, str], tuple[str, str, str]] = {}
         existing_ids = [
@@ -1528,7 +1545,9 @@ class DocxPostprocessor:
 
         cls._format_tables(body, has_table_grid)
         cls._format_table_captions(body, caption_style, target_map, get_next_bm_id)
-        cls._format_equations(body, caption_style, initial_layout, target_map, get_next_bm_id)
+        cls._format_equations(
+            body, caption_style, effective_initial_layout, target_map, get_next_bm_id
+        )
 
         # 2. Section headings bookmarks
         for p in body.findall(f"{{{W_NS}}}p"):
@@ -1671,7 +1690,7 @@ class DocxPostprocessor:
                 if tag.endswith("headerReference") or tag.endswith("footerReference"):
                     header_footer_refs.append(etree.fromstring(etree.tostring(child)))
 
-        current_layout = initial_layout
+        current_layout = effective_initial_layout
         marker_paragraphs: list[tuple[etree.Element, SectionLayout]] = []
 
         # Find all marker paragraphs in body
@@ -1696,7 +1715,7 @@ class DocxPostprocessor:
                 current_layout = next_layout
 
         # Apply intermediate section breaks
-        current_layout = initial_layout
+        current_layout = effective_initial_layout
         for p, next_layout in marker_paragraphs:
             # The current_layout governs the section ending at this marker!
             pPr = p.find(f"{{{W_NS}}}pPr")
