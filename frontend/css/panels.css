@@ -585,6 +585,9 @@
 .preview-table-container {
   margin: 16px 0;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .preview-table-container.align-center {
@@ -613,6 +616,7 @@
 
 .preview-table-container table {
   width: 100%;
+  min-width: 650px;
   border-collapse: collapse;
   font-size: 9.5pt;
   margin-bottom: 8px;

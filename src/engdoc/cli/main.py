@@ -162,7 +162,9 @@ def cli_inspect(args: argparse.Namespace) -> int:
         print("\n========================================================")
         print(f" Inspection: {res.filename} ({res.file_size_bytes:,} bytes)")
         print("========================================================")
-        print(f"Paragraphs: {res.paragraph_count} | Words: {res.word_count} | Chars: {res.character_count}")
+        print(
+            f"Paragraphs: {res.paragraph_count} | Words: {res.word_count} | Chars: {res.character_count}"
+        )
         print("--------------------------------------------------------")
 
         if res.metadata.title or res.metadata.author:
@@ -205,7 +207,9 @@ def cli_inspect(args: argparse.Namespace) -> int:
             print("--------------------------------------------------------")
             print(f"Tables ({len(res.tables)}):")
             for t in res.tables:
-                print(f"  Table #{t.table_index}: {t.rows} rows x {t.columns} cols | Headers: {t.sample_headers}")
+                print(
+                    f"  Table #{t.table_index}: {t.rows} rows x {t.columns} cols | Headers: {t.sample_headers}"
+                )
 
         print("========================================================\n")
         return 0
@@ -221,7 +225,11 @@ def cli_patch(args: argparse.Namespace) -> int:
         print(f"[ERROR] Target document not found: {target_path}", file=sys.stderr)
         return 1
 
-    out_path = Path(args.output).resolve() if args.output else target_path.with_stem(f"{target_path.stem}_patched")
+    out_path = (
+        Path(args.output).resolve()
+        if args.output
+        else target_path.with_stem(f"{target_path.stem}_patched")
+    )
 
     # Read snippet
     snippet_content = ""
@@ -293,6 +301,21 @@ def cli_serve(args: argparse.Namespace) -> int:
             browser_timer.cancel()
 
 
+def cli_mcp(args: argparse.Namespace) -> int:
+    """Launches the Model Context Protocol (MCP) server for AI agent integration."""
+    from engdoc.mcp.server import create_mcp_server
+
+    server = create_mcp_server()
+    transport = args.transport.lower()
+    if transport == "stdio":
+        server.run(transport="stdio")
+    elif transport == "sse":
+        server.run(transport="sse", host=args.host, port=args.port)
+    elif transport == "streamable-http":
+        server.run(transport="streamable-http", host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Constructs the command-line argument parser."""
     parser = argparse.ArgumentParser(
@@ -302,7 +325,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # Subcommand: doctor
-    sub_doctor = subparsers.add_parser("doctor", help="Inspect environment readiness and external tools")
+    sub_doctor = subparsers.add_parser(
+        "doctor", help="Inspect environment readiness and external tools"
+    )
     sub_doctor.set_defaults(func=cli_doctor)
 
     # Subcommand: new
@@ -317,7 +342,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Subcommand: build
     sub_build = subparsers.add_parser("build", help="Build publication DOCX and/or PDF documents")
     sub_build.add_argument("project_path", help="Path to .mdoc archive")
-    sub_build.add_argument("-f", "--format", default="docx", help="Comma-separated formats: docx, pdf")
+    sub_build.add_argument(
+        "-f", "--format", default="docx", help="Comma-separated formats: docx, pdf"
+    )
     sub_build.add_argument("-o", "--output", help="Custom output filename")
     sub_build.add_argument("--output-dir", help="Directory where published files are placed")
     sub_build.add_argument("-t", "--template", help="Name of reference Word template")
@@ -332,7 +359,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub_patch = subparsers.add_parser("patch", help="Surgically patch an existing Word document")
     sub_patch.add_argument("target", help="Path to target .docx document")
     sub_patch.add_argument(
-        "-a", "--action",
+        "-a",
+        "--action",
         choices=["INSERT_BEFORE", "INSERT_AFTER", "REPLACE", "APPEND"],
         required=True,
         help="Patch operation to apply",
@@ -344,7 +372,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Type of anchor target",
     )
     sub_patch.add_argument("--anchor-name", default="", help="Name or text of anchor")
-    sub_patch.add_argument("-s", "--snippet", required=True, help="Markdown snippet text or file path")
+    sub_patch.add_argument(
+        "-s", "--snippet", required=True, help="Markdown snippet text or file path"
+    )
     sub_patch.add_argument("-o", "--output", help="Output path for patched document")
     sub_patch.set_defaults(func=cli_patch)
 
@@ -352,8 +382,28 @@ def build_parser() -> argparse.ArgumentParser:
     sub_serve = subparsers.add_parser("serve", help="Launch the local web authoring interface")
     sub_serve.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     sub_serve.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
-    sub_serve.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
+    sub_serve.add_argument(
+        "--no-browser", action="store_true", help="Do not open browser automatically"
+    )
     sub_serve.set_defaults(func=cli_serve)
+
+    # Subcommand: mcp
+    sub_mcp = subparsers.add_parser(
+        "mcp", help="Run Model Context Protocol (MCP) server for AI agent integration"
+    )
+    sub_mcp.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="Transport protocol (default: stdio)",
+    )
+    sub_mcp.add_argument(
+        "--host", default="127.0.0.1", help="Bind host for HTTP/SSE (default: 127.0.0.1)"
+    )
+    sub_mcp.add_argument(
+        "--port", type=int, default=8000, help="Bind port for HTTP/SSE (default: 8000)"
+    )
+    sub_mcp.set_defaults(func=cli_mcp)
 
     return parser
 
